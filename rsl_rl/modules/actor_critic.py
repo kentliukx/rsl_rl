@@ -51,8 +51,53 @@ class ActorCritic(nn.Module):
 
         activation = get_activation(activation)
 
-        mlp_input_dim_a = num_actor_obs
-        mlp_input_dim_c = num_critic_obs
+        # Observation layout from legged_gym:
+        # 0:3   base_lin_vel
+        # 3:6   base_ang_vel
+        # 6:9   projected_gravity
+        # 9:21  dof_pos_offset
+        # 21:33 dof_vel
+        # 33:45 previous_actions
+        # 45:47 goal_xy
+        # 47:48 reached_goal_flag
+        # 48:52 ladder_info
+        # 52:283 height_scan
+        self.obs_slices = {
+            "base_lin_vel": slice(0, 3),
+            "base_ang_vel": slice(3, 6),
+            "projected_gravity": slice(6, 9),
+            "dof_pos_offset": slice(9, 21),
+            "dof_vel": slice(21, 33),
+            "prev_actions": slice(33, 45),
+            "goal_xy": slice(45, 47),
+            "reached_goal": slice(47, 48),
+            "ladder_info": slice(48, 52),
+            "height_scan": slice(52, 283),
+        }
+
+        self.proprio_dim = 45
+        self.task_dim = 7
+        self.task_latent_dim = 8
+        self.height_dim = 231
+        self.height_latent_dim = 32
+
+        self.task_encoder = nn.Sequential(
+            nn.Linear(self.task_dim, 32),
+            activation,
+            nn.Linear(32, 16),
+            activation,
+            nn.Linear(16, self.task_latent_dim),
+        )
+        self.height_encoder = nn.Sequential(
+            nn.Linear(self.height_dim, 128),
+            activation,
+            nn.Linear(128, 64),
+            activation,
+            nn.Linear(64, self.height_latent_dim),
+        )
+
+        mlp_input_dim_a = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
+        mlp_input_dim_c = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
 
         # Policy
         actor_layers = []
@@ -78,6 +123,8 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
+        print(f"Task encoder: {self.task_encoder}")
+        print(f"Height encoder: {self.height_encoder}")
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
 
@@ -116,8 +163,40 @@ class ActorCritic(nn.Module):
     def entropy(self):
         return self.distribution.entropy().sum(dim=-1)
 
+    def _split_observations(self, observations):
+        return {name: observations[:, obs_slice] for name, obs_slice in self.obs_slices.items()}
+
+    def _build_actor_input(self, observations):
+        obs = self._split_observations(observations)
+        proprio = torch.cat(
+            [
+                obs["base_lin_vel"],
+                obs["base_ang_vel"],
+                obs["projected_gravity"],
+                obs["dof_pos_offset"],
+                obs["dof_vel"],
+                obs["prev_actions"],
+            ],
+            dim=-1,
+        )
+        task = torch.cat(
+            [
+                obs["goal_xy"],
+                obs["reached_goal"],
+                obs["ladder_info"],
+            ],
+            dim=-1,
+        )
+        task_latent = self.task_encoder(task)
+        height_latent = self.height_encoder(obs["height_scan"])
+        return torch.cat([proprio, task_latent, height_latent], dim=-1)
+
+    def _build_critic_input(self, observations):
+        return self._build_actor_input(observations)
+
     def update_distribution(self, observations):
-        mean = self.actor(observations)
+        actor_input = self._build_actor_input(observations)
+        mean = self.actor(actor_input)
         self.distribution = Normal(mean, mean*0. + self.std)
 
     def act(self, observations, **kwargs):
@@ -128,11 +207,13 @@ class ActorCritic(nn.Module):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
+        actor_input = self._build_actor_input(observations)
+        actions_mean = self.actor(actor_input)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
-        value = self.critic(critic_observations)
+        critic_input = self._build_critic_input(critic_observations)
+        value = self.critic(critic_input)
         return value
 
 def get_activation(act_name):
