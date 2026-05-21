@@ -28,6 +28,7 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
+import copy
 import numpy as np
 
 import torch
@@ -81,20 +82,10 @@ class ActorCritic(nn.Module):
         self.height_dim = 231
         self.height_latent_dim = 32
 
-        self.task_encoder = nn.Sequential(
-            nn.Linear(self.task_dim, 32),
-            activation,
-            nn.Linear(32, 16),
-            activation,
-            nn.Linear(16, self.task_latent_dim),
-        )
-        self.height_encoder = nn.Sequential(
-            nn.Linear(self.height_dim, 128),
-            activation,
-            nn.Linear(128, 64),
-            activation,
-            nn.Linear(64, self.height_latent_dim),
-        )
+        self.task_encoder = self._build_task_encoder(activation)
+        self.height_encoder = self._build_height_encoder(activation)
+        self.critic_task_encoder = self._build_task_encoder(activation)
+        self.critic_height_encoder = self._build_height_encoder(activation)
 
         mlp_input_dim_a = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
         mlp_input_dim_c = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
@@ -123,8 +114,10 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
-        print(f"Task encoder: {self.task_encoder}")
-        print(f"Height encoder: {self.height_encoder}")
+        print(f"Actor task encoder: {self.task_encoder}")
+        print(f"Actor height encoder: {self.height_encoder}")
+        print(f"Critic task encoder: {self.critic_task_encoder}")
+        print(f"Critic height encoder: {self.critic_height_encoder}")
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
 
@@ -150,6 +143,29 @@ class ActorCritic(nn.Module):
 
     def forward(self):
         raise NotImplementedError
+
+    def _build_task_encoder(self, activation):
+        return nn.Sequential(
+            nn.Linear(self.task_dim, 32),
+            self._clone_activation(activation),
+            nn.Linear(32, 16),
+            self._clone_activation(activation),
+            nn.Linear(16, self.task_latent_dim),
+        )
+
+    def _build_height_encoder(self, activation):
+        return nn.Sequential(
+            nn.Linear(self.height_dim, 128),
+            self._clone_activation(activation),
+            nn.Linear(128, 64),
+            self._clone_activation(activation),
+            nn.Linear(64, self.height_latent_dim),
+        )
+
+    def _clone_activation(self, activation):
+        if isinstance(activation, str):
+            return get_activation(activation)
+        return copy.deepcopy(activation)
     
     @property
     def action_mean(self):
@@ -168,7 +184,22 @@ class ActorCritic(nn.Module):
 
     def _build_actor_input(self, observations):
         obs = self._split_observations(observations)
-        proprio = torch.cat(
+        proprio = self._build_proprio(obs)
+        task = self._build_task(obs)
+        task_latent = self.task_encoder(task)
+        height_latent = self.height_encoder(obs["height_scan"])
+        return torch.cat([proprio, task_latent, height_latent], dim=-1)
+
+    def _build_critic_input(self, observations):
+        obs = self._split_observations(observations)
+        proprio = self._build_proprio(obs)
+        task = self._build_task(obs)
+        task_latent = self.critic_task_encoder(task)
+        height_latent = self.critic_height_encoder(obs["height_scan"])
+        return torch.cat([proprio, task_latent, height_latent], dim=-1)
+
+    def _build_proprio(self, obs):
+        return torch.cat(
             [
                 obs["base_lin_vel"],
                 obs["base_ang_vel"],
@@ -179,7 +210,9 @@ class ActorCritic(nn.Module):
             ],
             dim=-1,
         )
-        task = torch.cat(
+
+    def _build_task(self, obs):
+        return torch.cat(
             [
                 obs["goal_xy"],
                 obs["reached_goal"],
@@ -187,12 +220,6 @@ class ActorCritic(nn.Module):
             ],
             dim=-1,
         )
-        task_latent = self.task_encoder(task)
-        height_latent = self.height_encoder(obs["height_scan"])
-        return torch.cat([proprio, task_latent, height_latent], dim=-1)
-
-    def _build_critic_input(self, observations):
-        return self._build_actor_input(observations)
 
     def update_distribution(self, observations):
         actor_input = self._build_actor_input(observations)
