@@ -61,8 +61,8 @@ class ActorCritic(nn.Module):
         # 33:45 previous_actions
         # 45:47 goal_xy
         # 47:48 reached_goal_flag
-        # 48:49 has_ladder
-        # 49:53 foot_contacts
+        # 48:52 foot_contacts
+        # 52:53 has_ladder
         # 53:57 ladder_info
         # 57:288 height_scan
         self.obs_slices = {
@@ -74,25 +74,26 @@ class ActorCritic(nn.Module):
             "prev_actions": slice(33, 45),
             "goal_xy": slice(45, 47),
             "reached_goal": slice(47, 48),
-            "has_ladder": slice(48, 49),
-            "foot_contacts": slice(49, 53),
+            "foot_contacts": slice(48, 52),
+            "has_ladder": slice(52, 53),
             "ladder_info": slice(53, 57),
             "height_scan": slice(57, 288),
         }
 
         self.proprio_dim = 45
-        self.task_dim = 12
-        self.task_latent_dim = 8
+        self.goal_dim = 3
+        self.privileged_dim = 9
+        self.privileged_latent_dim = 8
         self.height_dim = 231
         self.height_latent_dim = 32
 
-        self.task_encoder = self._build_task_encoder(activation)
+        self.privileged_encoder = self._build_privileged_encoder(activation)
         self.height_encoder = self._build_height_encoder(activation)
-        self.critic_task_encoder = self._build_task_encoder(activation)
+        self.critic_privileged_encoder = self._build_privileged_encoder(activation)
         self.critic_height_encoder = self._build_height_encoder(activation)
 
-        mlp_input_dim_a = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
-        mlp_input_dim_c = self.proprio_dim + self.task_latent_dim + self.height_latent_dim
+        mlp_input_dim_a = self.proprio_dim + self.goal_dim + self.privileged_latent_dim + self.height_latent_dim
+        mlp_input_dim_c = self.proprio_dim + self.goal_dim + self.privileged_latent_dim + self.height_latent_dim
 
         # Policy
         actor_layers = []
@@ -118,9 +119,9 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
-        print(f"Actor task encoder: {self.task_encoder}")
+        print(f"Actor privileged encoder: {self.privileged_encoder}")
         print(f"Actor height encoder: {self.height_encoder}")
-        print(f"Critic task encoder: {self.critic_task_encoder}")
+        print(f"Critic privileged encoder: {self.critic_privileged_encoder}")
         print(f"Critic height encoder: {self.critic_height_encoder}")
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
@@ -148,13 +149,13 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
-    def _build_task_encoder(self, activation):
+    def _build_privileged_encoder(self, activation):
         return nn.Sequential(
-            nn.Linear(self.task_dim, 32),
+            nn.Linear(self.privileged_dim, 32),
             self._clone_activation(activation),
             nn.Linear(32, 16),
             self._clone_activation(activation),
-            nn.Linear(16, self.task_latent_dim),
+            nn.Linear(16, self.privileged_latent_dim),
         )
 
     def _build_height_encoder(self, activation):
@@ -189,18 +190,20 @@ class ActorCritic(nn.Module):
     def _build_actor_input(self, observations):
         obs = self._split_observations(observations)
         proprio = self._build_proprio(obs)
-        task = self._build_task(obs)
-        task_latent = self.task_encoder(task)
+        goal = self._build_goal(obs)
+        privileged = self._build_privileged(obs)
+        privileged_latent = self.privileged_encoder(privileged)
         height_latent = self.height_encoder(obs["height_scan"])
-        return torch.cat([proprio, task_latent, height_latent], dim=-1)
+        return torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1)
 
     def _build_critic_input(self, observations):
         obs = self._split_observations(observations)
         proprio = self._build_proprio(obs)
-        task = self._build_task(obs)
-        task_latent = self.critic_task_encoder(task)
+        goal = self._build_goal(obs)
+        privileged = self._build_privileged(obs)
+        privileged_latent = self.critic_privileged_encoder(privileged)
         height_latent = self.critic_height_encoder(obs["height_scan"])
-        return torch.cat([proprio, task_latent, height_latent], dim=-1)
+        return torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1)
 
     def _build_proprio(self, obs):
         return torch.cat(
@@ -215,13 +218,20 @@ class ActorCritic(nn.Module):
             dim=-1,
         )
 
-    def _build_task(self, obs):
+    def _build_goal(self, obs):
         return torch.cat(
             [
                 obs["goal_xy"],
                 obs["reached_goal"],
-                obs["has_ladder"],
+            ],
+            dim=-1,
+        )
+
+    def _build_privileged(self, obs):
+        return torch.cat(
+            [
                 obs["foot_contacts"],
+                obs["has_ladder"],
                 obs["ladder_info"],
             ],
             dim=-1,
