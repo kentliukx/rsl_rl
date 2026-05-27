@@ -64,7 +64,13 @@ class ActorCritic(nn.Module):
         # 48:52 foot_contacts
         # 52:53 has_ladder
         # 53:57 ladder_info
-        # 57:288 height_scan
+        # 57:58 friction
+        # 58:59 added_mass
+        # 59:60 p_gain
+        # 60:61 d_gain
+        # 61:64 applied_force
+        # 64:67 applied_torque
+        # 67:298 height_scan
         self.obs_slices = {
             "base_lin_vel": slice(0, 3),
             "base_ang_vel": slice(3, 6),
@@ -77,12 +83,18 @@ class ActorCritic(nn.Module):
             "foot_contacts": slice(48, 52),
             "has_ladder": slice(52, 53),
             "ladder_info": slice(53, 57),
-            "height_scan": slice(57, 288),
+            "friction": slice(57, 58),
+            "added_mass": slice(58, 59),
+            "p_gain": slice(59, 60),
+            "d_gain": slice(60, 61),
+            "applied_force": slice(61, 64),
+            "applied_torque": slice(64, 67),
+            "height_scan": slice(67, 298),
         }
 
         self.proprio_dim = 45
         self.goal_dim = 3
-        self.privileged_dim = 9
+        self.privileged_dim = 19
         self.privileged_latent_dim = 8
         self.height_dim = 231
         self.height_latent_dim = 32
@@ -233,6 +245,12 @@ class ActorCritic(nn.Module):
                 obs["foot_contacts"],
                 obs["has_ladder"],
                 obs["ladder_info"],
+                obs["friction"],
+                obs["added_mass"],
+                obs["p_gain"],
+                obs["d_gain"],
+                obs["applied_force"],
+                obs["applied_torque"],
             ],
             dim=-1,
         )
