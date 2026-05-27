@@ -62,8 +62,9 @@ class ActorCritic(nn.Module):
         # 45:47 goal_xy
         # 47:48 reached_goal_flag
         # 48:49 has_ladder
-        # 49:53 ladder_info
-        # 53:284 height_scan
+        # 49:53 foot_contacts
+        # 53:57 ladder_info
+        # 57:288 height_scan
         self.obs_slices = {
             "base_lin_vel": slice(0, 3),
             "base_ang_vel": slice(3, 6),
@@ -74,12 +75,13 @@ class ActorCritic(nn.Module):
             "goal_xy": slice(45, 47),
             "reached_goal": slice(47, 48),
             "has_ladder": slice(48, 49),
-            "ladder_info": slice(49, 53),
-            "height_scan": slice(53, 284),
+            "foot_contacts": slice(49, 53),
+            "ladder_info": slice(53, 57),
+            "height_scan": slice(57, 288),
         }
 
         self.proprio_dim = 45
-        self.task_dim = 8
+        self.task_dim = 12
         self.task_latent_dim = 8
         self.height_dim = 231
         self.height_latent_dim = 32
@@ -219,6 +221,7 @@ class ActorCritic(nn.Module):
                 obs["goal_xy"],
                 obs["reached_goal"],
                 obs["has_ladder"],
+                obs["foot_contacts"],
                 obs["ladder_info"],
             ],
             dim=-1,
