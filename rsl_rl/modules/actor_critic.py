@@ -62,15 +62,16 @@ class ActorCritic(nn.Module):
         # 45:47 goal_xy
         # 47:48 reached_goal_flag
         # 48:52 foot_contacts
-        # 52:53 has_ladder
-        # 53:57 ladder_info
-        # 57:58 friction
-        # 58:59 added_mass
-        # 59:60 p_gain
-        # 60:61 d_gain
-        # 61:64 applied_force
-        # 64:67 applied_torque
-        # 67:298 height_scan
+        # 52:56 feet_air_time
+        # 56:57 has_ladder
+        # 57:61 ladder_info
+        # 61:62 friction
+        # 62:63 added_mass
+        # 63:64 p_gain
+        # 64:65 d_gain
+        # 65:68 applied_force
+        # 68:71 applied_torque
+        # 71:302 height_scan
         self.obs_slices = {
             "base_lin_vel": slice(0, 3),
             "base_ang_vel": slice(3, 6),
@@ -81,21 +82,22 @@ class ActorCritic(nn.Module):
             "goal_xy": slice(45, 47),
             "reached_goal": slice(47, 48),
             "foot_contacts": slice(48, 52),
-            "has_ladder": slice(52, 53),
-            "ladder_info": slice(53, 57),
-            "friction": slice(57, 58),
-            "added_mass": slice(58, 59),
-            "p_gain": slice(59, 60),
-            "d_gain": slice(60, 61),
-            "applied_force": slice(61, 64),
-            "applied_torque": slice(64, 67),
-            "height_scan": slice(67, 298),
+            "feet_air_time": slice(52, 56),
+            "has_ladder": slice(56, 57),
+            "ladder_info": slice(57, 61),
+            "friction": slice(61, 62),
+            "added_mass": slice(62, 63),
+            "p_gain": slice(63, 64),
+            "d_gain": slice(64, 65),
+            "applied_force": slice(65, 68),
+            "applied_torque": slice(68, 71),
+            "height_scan": slice(71, 302),
         }
 
         self.proprio_dim = 45
         self.goal_dim = 3
-        self.privileged_dim = 19
-        self.privileged_latent_dim = 8
+        self.privileged_dim = 23
+        self.privileged_latent_dim = 16
         self.height_dim = 231
         self.height_latent_dim = 32
 
@@ -165,9 +167,9 @@ class ActorCritic(nn.Module):
         return nn.Sequential(
             nn.Linear(self.privileged_dim, 32),
             self._clone_activation(activation),
-            nn.Linear(32, 16),
+            nn.Linear(32, 24),
             self._clone_activation(activation),
-            nn.Linear(16, self.privileged_latent_dim),
+            nn.Linear(24, self.privileged_latent_dim),
         )
 
     def _build_height_encoder(self, activation):
@@ -243,6 +245,7 @@ class ActorCritic(nn.Module):
         return torch.cat(
             [
                 obs["foot_contacts"],
+                obs["feet_air_time"],
                 obs["has_ladder"],
                 obs["ladder_info"],
                 obs["friction"],
