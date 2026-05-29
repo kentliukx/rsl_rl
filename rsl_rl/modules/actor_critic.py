@@ -103,11 +103,10 @@ class ActorCritic(nn.Module):
 
         self.privileged_encoder = self._build_privileged_encoder(activation)
         self.height_encoder = self._build_height_encoder(activation)
-        self.critic_privileged_encoder = self._build_privileged_encoder(activation)
         self.critic_height_encoder = self._build_height_encoder(activation)
 
         mlp_input_dim_a = self.proprio_dim + self.goal_dim + self.privileged_latent_dim + self.height_latent_dim
-        mlp_input_dim_c = self.proprio_dim + self.goal_dim + self.privileged_latent_dim + self.height_latent_dim
+        mlp_input_dim_c = self.proprio_dim + self.goal_dim + self.privileged_dim + self.height_latent_dim
 
         # Policy
         actor_layers = []
@@ -135,7 +134,6 @@ class ActorCritic(nn.Module):
 
         print(f"Actor privileged encoder: {self.privileged_encoder}")
         print(f"Actor height encoder: {self.height_encoder}")
-        print(f"Critic privileged encoder: {self.critic_privileged_encoder}")
         print(f"Critic height encoder: {self.critic_height_encoder}")
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
@@ -215,9 +213,8 @@ class ActorCritic(nn.Module):
         proprio = self._build_proprio(obs)
         goal = self._build_goal(obs)
         privileged = self._build_privileged(obs)
-        privileged_latent = self.critic_privileged_encoder(privileged)
         height_latent = self.critic_height_encoder(obs["height_scan"])
-        return torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1)
+        return torch.cat([proprio, goal, privileged, height_latent], dim=-1)
 
     def _build_proprio(self, obs):
         return torch.cat(
