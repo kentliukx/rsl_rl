@@ -63,15 +63,14 @@ class ActorCritic(nn.Module):
         # 47:48 reached_goal_flag
         # 48:52 foot_contacts
         # 52:56 feet_air_time
-        # 56:57 has_ladder
-        # 57:61 ladder_info
-        # 61:62 friction
-        # 62:63 added_mass
-        # 63:64 p_gain
-        # 64:65 d_gain
-        # 65:68 applied_force
-        # 68:71 applied_torque
-        # 71:302 height_scan
+        # 56:60 ladder_info
+        # 60:61 friction
+        # 61:62 added_mass
+        # 62:63 p_gain
+        # 63:64 d_gain
+        # 64:67 applied_force
+        # 67:70 applied_torque
+        # 70:301 height_scan
         self.obs_slices = {
             "base_lin_vel": slice(0, 3),
             "base_ang_vel": slice(3, 6),
@@ -83,20 +82,19 @@ class ActorCritic(nn.Module):
             "reached_goal": slice(47, 48),
             "foot_contacts": slice(48, 52),
             "feet_air_time": slice(52, 56),
-            "has_ladder": slice(56, 57),
-            "ladder_info": slice(57, 61),
-            "friction": slice(61, 62),
-            "added_mass": slice(62, 63),
-            "p_gain": slice(63, 64),
-            "d_gain": slice(64, 65),
-            "applied_force": slice(65, 68),
-            "applied_torque": slice(68, 71),
-            "height_scan": slice(71, 302),
+            "ladder_info": slice(56, 60),
+            "friction": slice(60, 61),
+            "added_mass": slice(61, 62),
+            "p_gain": slice(62, 63),
+            "d_gain": slice(63, 64),
+            "applied_force": slice(64, 67),
+            "applied_torque": slice(67, 70),
+            "height_scan": slice(70, 301),
         }
 
         self.proprio_dim = 45
         self.goal_dim = 3
-        self.privileged_dim = 23
+        self.privileged_dim = 22
         self.privileged_latent_dim = 16
         self.height_dim = 231
         self.height_latent_dim = 32
@@ -243,7 +241,6 @@ class ActorCritic(nn.Module):
             [
                 obs["foot_contacts"],
                 obs["feet_air_time"],
-                obs["has_ladder"],
                 obs["ladder_info"],
                 obs["friction"],
                 obs["added_mass"],
