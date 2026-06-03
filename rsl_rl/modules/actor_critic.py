@@ -64,14 +64,14 @@ class ActorCritic(nn.Module):
         # 48:52 foot_contacts
         # 52:56 feet_air_time
         # 56:60 feet_ground_time
-        # 60:64 ladder_info
-        # 64:65 friction
-        # 65:66 added_mass
-        # 66:67 p_gain
-        # 67:68 d_gain
-        # 68:71 applied_force
-        # 71:74 applied_torque
-        # 74:305 height_scan
+        # 60:65 ladder_info
+        # 65:66 friction
+        # 66:67 added_mass
+        # 67:68 p_gain
+        # 68:69 d_gain
+        # 69:72 applied_force
+        # 72:75 applied_torque
+        # 75:306 height_scan
         self.obs_slices = {
             "base_lin_vel": slice(0, 3),
             "base_ang_vel": slice(3, 6),
@@ -84,19 +84,19 @@ class ActorCritic(nn.Module):
             "foot_contacts": slice(48, 52),
             "feet_air_time": slice(52, 56),
             "feet_ground_time": slice(56, 60),
-            "ladder_info": slice(60, 64),
-            "friction": slice(64, 65),
-            "added_mass": slice(65, 66),
-            "p_gain": slice(66, 67),
-            "d_gain": slice(67, 68),
-            "applied_force": slice(68, 71),
-            "applied_torque": slice(71, 74),
-            "height_scan": slice(74, 305),
+            "ladder_info": slice(60, 65),
+            "friction": slice(65, 66),
+            "added_mass": slice(66, 67),
+            "p_gain": slice(67, 68),
+            "d_gain": slice(68, 69),
+            "applied_force": slice(69, 72),
+            "applied_torque": slice(72, 75),
+            "height_scan": slice(75, 306),
         }
 
         self.proprio_dim = 45
         self.goal_dim = 3
-        self.privileged_dim = 26
+        self.privileged_dim = 27
         self.privileged_latent_dim = 16
         self.height_dim = 231
         self.height_latent_dim = 32
