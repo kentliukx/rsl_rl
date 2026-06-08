@@ -45,6 +45,7 @@ class ActorCritic(nn.Module):
                         critic_hidden_dims=[256, 256, 256],
                         activation='elu',
                         init_noise_std=1.0,
+                        actor_input_dim=None,
                         **kwargs):
         if kwargs:
             print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
@@ -52,60 +53,37 @@ class ActorCritic(nn.Module):
 
         activation = get_activation(activation)
 
-        # Observation layout from legged_gym:
-        # 0:3   base_lin_vel
-        # 3:6   base_ang_vel
-        # 6:9   projected_gravity
-        # 9:21  dof_pos_offset
-        # 21:33 dof_vel
-        # 33:45 previous_actions
-        # 45:47 goal_xy
-        # 47:48 reached_goal_flag
-        # 48:52 foot_contacts
-        # 52:56 feet_air_time
-        # 56:60 feet_ground_time
-        # 60:65 ladder_info
-        # 65:66 friction
-        # 66:67 added_mass
-        # 67:68 p_gain
-        # 68:69 d_gain
-        # 69:72 applied_force
-        # 72:75 applied_torque
-        # 75:306 height_scan
         self.obs_slices = {
-            "base_lin_vel": slice(0, 3),
-            "base_ang_vel": slice(3, 6),
-            "projected_gravity": slice(6, 9),
-            "dof_pos_offset": slice(9, 21),
-            "dof_vel": slice(21, 33),
-            "prev_actions": slice(33, 45),
-            "goal_xy": slice(45, 47),
-            "reached_goal": slice(47, 48),
-            "foot_contacts": slice(48, 52),
-            "feet_air_time": slice(52, 56),
-            "feet_ground_time": slice(56, 60),
-            "ladder_info": slice(60, 65),
-            "friction": slice(65, 66),
-            "added_mass": slice(66, 67),
-            "p_gain": slice(67, 68),
-            "d_gain": slice(68, 69),
-            "applied_force": slice(69, 72),
-            "applied_torque": slice(72, 75),
-            "height_scan": slice(75, 306),
+            "goal": slice(0, 3),
+            "curr_proprio_clean": slice(3, 45),
+            "curr_proprio_noisy": slice(45, 87),
+            "proprio_history": slice(87, 2187),
+            "base_lin_vel": slice(2187, 2190),
+            "foot_contacts": slice(2190, 2194),
+            "friction": slice(2194, 2195),
+            "added_mass": slice(2195, 2196),
+            "p_gain": slice(2196, 2197),
+            "d_gain": slice(2197, 2198),
+            "applied_force": slice(2198, 2201),
+            "applied_torque": slice(2201, 2204),
+            "feet_air_time": slice(2204, 2208),
+            "phase_feet_ground_time": slice(2208, 2212),
+            "height_scan": slice(2212, 2443),
+            "ladder_info": slice(2443, 2448),
+            "depth_image": slice(2448, 4752),
         }
 
-        self.proprio_dim = 45
+        self.proprio_dim = 42
         self.goal_dim = 3
-        self.privileged_dim = 27
-        self.privileged_latent_dim = 16
+        self.privileged_dim = 25
         self.height_dim = 231
         self.height_latent_dim = 32
 
-        self.privileged_encoder = self._build_privileged_encoder(activation)
-        self.height_encoder = self._build_height_encoder(activation)
         self.critic_height_encoder = self._build_height_encoder(activation)
 
-        mlp_input_dim_a = self.proprio_dim + self.goal_dim + self.privileged_latent_dim + self.height_latent_dim
+        if actor_input_dim is None:
+            actor_input_dim = self.proprio_dim + self.goal_dim
+        mlp_input_dim_a = actor_input_dim
         mlp_input_dim_c = self.proprio_dim + self.goal_dim + self.privileged_dim + self.height_latent_dim
 
         # Policy
@@ -132,8 +110,6 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
-        print(f"Actor privileged encoder: {self.privileged_encoder}")
-        print(f"Actor height encoder: {self.height_encoder}")
         print(f"Critic height encoder: {self.critic_height_encoder}")
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
@@ -160,15 +136,6 @@ class ActorCritic(nn.Module):
 
     def forward(self):
         raise NotImplementedError
-
-    def _build_privileged_encoder(self, activation):
-        return nn.Sequential(
-            nn.Linear(self.privileged_dim, 32),
-            self._clone_activation(activation),
-            nn.Linear(32, 24),
-            self._clone_activation(activation),
-            nn.Linear(24, self.privileged_latent_dim),
-        )
 
     def _build_height_encoder(self, activation):
         return nn.Sequential(
@@ -197,60 +164,27 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def _split_observations(self, observations):
-        return {name: observations[:, obs_slice] for name, obs_slice in self.obs_slices.items()}
-
-    def _build_actor_input(self, observations):
-        obs = self._split_observations(observations)
-        proprio = self._build_proprio(obs)
-        goal = self._build_goal(obs)
-        privileged = self._build_privileged(obs)
-        privileged_latent = self.privileged_encoder(privileged)
-        height_latent = self.height_encoder(obs["height_scan"])
-        return torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1)
+        return {name: observations[..., obs_slice] for name, obs_slice in self.obs_slices.items()}
 
     def _build_critic_input(self, observations):
         obs = self._split_observations(observations)
-        proprio = self._build_proprio(obs)
-        goal = self._build_goal(obs)
         privileged = self._build_privileged(obs)
         height_latent = self.critic_height_encoder(obs["height_scan"])
-        return torch.cat([proprio, goal, privileged, height_latent], dim=-1)
-
-    def _build_proprio(self, obs):
-        return torch.cat(
-            [
-                obs["base_lin_vel"],
-                obs["base_ang_vel"],
-                obs["projected_gravity"],
-                obs["dof_pos_offset"],
-                obs["dof_vel"],
-                obs["prev_actions"],
-            ],
-            dim=-1,
-        )
-
-    def _build_goal(self, obs):
-        return torch.cat(
-            [
-                obs["goal_xy"],
-                obs["reached_goal"],
-            ],
-            dim=-1,
-        )
+        return torch.cat([obs["curr_proprio_clean"], obs["goal"], privileged, height_latent], dim=-1)
 
     def _build_privileged(self, obs):
         return torch.cat(
             [
+                obs["base_lin_vel"],
                 obs["foot_contacts"],
-                obs["feet_air_time"],
-                obs["feet_ground_time"],
-                obs["ladder_info"],
                 obs["friction"],
                 obs["added_mass"],
                 obs["p_gain"],
                 obs["d_gain"],
                 obs["applied_force"],
                 obs["applied_torque"],
+                obs["feet_air_time"],
+                obs["phase_feet_ground_time"],
             ],
             dim=-1,
         )
@@ -272,8 +206,11 @@ class ActorCritic(nn.Module):
         actions_mean = self.actor(actor_input)
         return actions_mean
 
-    def evaluate(self, critic_observations, **kwargs):
+    def evaluate(self, critic_observations, masks=None, **kwargs):
         critic_input = self._build_critic_input(critic_observations)
+        if masks is not None:
+            from rsl_rl.utils import unpad_trajectories
+            critic_input = unpad_trajectories(critic_input, masks)
         value = self.critic(critic_input)
         return value
 

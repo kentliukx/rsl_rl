@@ -37,7 +37,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch
 
 from rsl_rl.algorithms import PPO
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, TeacherPolicy
 from rsl_rl.env import VecEnv
 
 
@@ -65,6 +65,7 @@ class OnPolicyRunner:
                                                         **self.policy_cfg).to(self.device)
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
         self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        self.teacher_checkpoint = self.cfg.get("teacher_checkpoint")
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
 
@@ -81,6 +82,16 @@ class OnPolicyRunner:
         _, _ = self.env.reset()
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        if self.teacher_checkpoint and self.alg.teacher is None:
+            teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
+            teacher = TeacherPolicy(
+                self.env.num_actions,
+                actor_hidden_dims=self.policy_cfg["actor_hidden_dims"],
+                activation=self.policy_cfg["activation"],
+            ).to(self.device)
+            teacher.load(teacher_checkpoint)
+            self.alg.set_teacher(teacher)
+            print(f"Loaded teacher policy from: {teacher_checkpoint}")
         # initialize writer
         if self.log_dir is not None and self.writer is None:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -129,7 +140,9 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            mean_value_loss, mean_surrogate_loss = self.alg.update()
+            if len(rewbuffer) > 0:
+                self.alg.update_imitation_coefficient(statistics.mean(rewbuffer))
+            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss = self.alg.update()
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
@@ -165,6 +178,11 @@ class OnPolicyRunner:
 
         self.writer.add_scalar('Loss/value_function', locs['mean_value_loss'], locs['it'])
         self.writer.add_scalar('Loss/surrogate', locs['mean_surrogate_loss'], locs['it'])
+        self.writer.add_scalar('Loss/estimator', locs['mean_estimator_loss'], locs['it'])
+        self.writer.add_scalar('Loss/height_reconstruction', locs['mean_height_reconstruction_loss'], locs['it'])
+        self.writer.add_scalar('Loss/imitation', locs['mean_imitation_loss'], locs['it'])
+        self.writer.add_scalar('Loss/imitation_coefficient', self.alg.imitation_loss_coef, locs['it'])
+        self.writer.add_scalar('Loss/policy_coefficient', self.alg.policy_loss_coef, locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
@@ -185,6 +203,11 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                          f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
+                          f"""{'Height reconstruction loss:':>{pad}} {locs['mean_height_reconstruction_loss']:.4f}\n"""
+                          f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
+                          f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
+                          f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
@@ -197,6 +220,11 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                          f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
+                          f"""{'Height reconstruction loss:':>{pad}} {locs['mean_height_reconstruction_loss']:.4f}\n"""
+                          f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
+                          f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
+                          f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -215,6 +243,10 @@ class OnPolicyRunner:
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'iter': self.current_learning_iteration,
+            'imitation_reward_ema': self.alg.imitation_reward_ema,
+            'imitation_best_reward': self.alg.imitation_best_reward,
+            'imitation_loss_coef': self.alg.imitation_loss_coef,
+            'policy_loss_coef': self.alg.policy_loss_coef,
             'infos': infos,
             }, path)
 
@@ -223,6 +255,10 @@ class OnPolicyRunner:
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
+        self.alg.imitation_reward_ema = loaded_dict.get('imitation_reward_ema')
+        self.alg.imitation_best_reward = loaded_dict.get('imitation_best_reward')
+        self.alg.imitation_loss_coef = loaded_dict.get('imitation_loss_coef', self.alg.imitation_loss_coef)
+        self.alg.policy_loss_coef = loaded_dict.get('policy_loss_coef', self.alg.policy_loss_coef)
         self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
 

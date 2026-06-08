@@ -39,18 +39,25 @@ class PPO:
     actor_critic: ActorCritic
     def __init__(self,
                  actor_critic,
-                 num_learning_epochs=1,
-                 num_mini_batches=1,
+                 num_learning_epochs=5,
+                 num_mini_batches=4,
                  clip_param=0.2,
-                 gamma=0.998,
+                 gamma=0.99,
                  lam=0.95,
                  value_loss_coef=1.0,
-                 entropy_coef=0.0,
+                 entropy_coef=0.01,
                  learning_rate=1e-3,
                  max_grad_norm=1.0,
                  use_clipped_value_loss=True,
-                 schedule="fixed",
+                 schedule="adaptive",
                  desired_kl=0.01,
+                 estimator_loss_coef=1,
+                 height_reconstruction_loss_coef=1,
+                 imitation_loss_coef=1.0,
+                 imitation_loss_min_coef=0.0,
+                 imitation_reward_lower=0.0,
+                 imitation_reward_upper=30.0,
+                 imitation_reward_lpf_k=0.2,
                  device='cpu',
                  ):
 
@@ -77,6 +84,45 @@ class PPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+        self.estimator_loss_coef = estimator_loss_coef
+        self.height_reconstruction_loss_coef = height_reconstruction_loss_coef
+        self.imitation_loss_max_coef = imitation_loss_coef
+        self.imitation_loss_min_coef = imitation_loss_min_coef
+        self.imitation_loss_coef = imitation_loss_coef
+        self.policy_loss_coef = 1.0
+        self.imitation_reward_lower = imitation_reward_lower
+        self.imitation_reward_upper = imitation_reward_upper
+        self.imitation_reward_lpf_k = imitation_reward_lpf_k
+        self.imitation_reward_ema = None
+        self.imitation_best_reward = None
+        self.teacher = None
+
+    def set_teacher(self, teacher):
+        self.teacher = teacher
+        self.policy_loss_coef = 0.0
+
+    def update_imitation_coefficient(self, mean_reward):
+        if self.teacher is None:
+            self.imitation_loss_coef = 0.0
+            self.policy_loss_coef = 1.0
+            return
+        if self.imitation_reward_ema is None:
+            self.imitation_reward_ema = mean_reward
+        else:
+            k = self.imitation_reward_lpf_k
+            self.imitation_reward_ema = (1.0 - k) * self.imitation_reward_ema + k * mean_reward
+        if self.imitation_best_reward is None:
+            self.imitation_best_reward = self.imitation_reward_ema
+        else:
+            self.imitation_best_reward = max(self.imitation_best_reward, self.imitation_reward_ema)
+        reward_progress = (self.imitation_best_reward - self.imitation_reward_lower) / (
+            self.imitation_reward_upper - self.imitation_reward_lower
+        )
+        reward_progress = min(max(reward_progress, 0.0), 1.0)
+        self.imitation_loss_coef = self.imitation_loss_max_coef + reward_progress * (
+            self.imitation_loss_min_coef - self.imitation_loss_max_coef
+        )
+        self.policy_loss_coef = reward_progress
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
@@ -120,6 +166,9 @@ class PPO:
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
+        mean_estimator_loss = 0
+        mean_height_reconstruction_loss = 0
+        mean_imitation_loss = 0
         if self.actor_critic.is_recurrent:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
@@ -168,7 +217,35 @@ class PPO:
                 else:
                     value_loss = (returns_batch - value_batch).pow(2).mean()
 
-                loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+                if hasattr(self.actor_critic, "estimator_loss"):
+                    estimator_loss = self.actor_critic.estimator_loss(obs_batch, masks_batch)
+                else:
+                    estimator_loss = torch.zeros((), device=self.device)
+                if hasattr(self.actor_critic, "height_reconstruction_loss"):
+                    height_reconstruction_loss = self.actor_critic.height_reconstruction_loss(obs_batch, masks_batch)
+                else:
+                    height_reconstruction_loss = torch.zeros((), device=self.device)
+                if self.teacher is not None:
+                    with torch.inference_mode():
+                        teacher_mu, teacher_sigma = self.teacher.distribution_parameters(obs_batch, masks_batch)
+                    student_sigma = sigma_batch.clamp_min(1e-6)
+                    teacher_sigma = teacher_sigma.clamp_min(1e-6)
+                    imitation_loss = torch.mean(torch.sum(
+                        torch.log(student_sigma / teacher_sigma)
+                        + (teacher_sigma.square() + (teacher_mu - mu_batch).square()) / (2.0 * student_sigma.square())
+                        - 0.5,
+                        dim=-1,
+                    ))
+                else:
+                    imitation_loss = torch.zeros((), device=self.device)
+                loss = (
+                    self.policy_loss_coef * surrogate_loss
+                    + self.value_loss_coef * value_loss
+                    + self.estimator_loss_coef * estimator_loss
+                    + self.height_reconstruction_loss_coef * height_reconstruction_loss
+                    + self.imitation_loss_coef * imitation_loss
+                    - self.entropy_coef * entropy_batch.mean()
+                )
 
                 # Gradient step
                 self.optimizer.zero_grad()
@@ -178,10 +255,16 @@ class PPO:
 
                 mean_value_loss += value_loss.item()
                 mean_surrogate_loss += surrogate_loss.item()
+                mean_estimator_loss += estimator_loss.item()
+                mean_height_reconstruction_loss += height_reconstruction_loss.item()
+                mean_imitation_loss += imitation_loss.item()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
+        mean_estimator_loss /= num_updates
+        mean_height_reconstruction_loss /= num_updates
+        mean_imitation_loss /= num_updates
         self.storage.clear()
 
-        return mean_value_loss, mean_surrogate_loss
+        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss
