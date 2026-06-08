@@ -75,7 +75,8 @@ class ActorCritic(nn.Module):
 
         self.proprio_dim = 42
         self.goal_dim = 3
-        self.privileged_dim = 25
+        self.ladder_info_dim = 5
+        self.privileged_dim = 30
         self.height_dim = 231
         self.height_latent_dim = 32
 
@@ -185,6 +186,7 @@ class ActorCritic(nn.Module):
                 obs["applied_torque"],
                 obs["feet_air_time"],
                 obs["phase_feet_ground_time"],
+                obs["ladder_info"],
             ],
             dim=-1,
         )

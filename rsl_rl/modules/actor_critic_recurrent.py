@@ -79,13 +79,14 @@ class ActorCriticRecurrent(ActorCritic):
         self.proprio_history_len = 50
         self.depth_height = 36
         self.depth_width = 64
+        self.reconstruction_dim = self.height_dim + self.ladder_info_dim
 
         self.history_encoder = self._build_history_encoder(activation_module)
         self.estimator = self._build_estimator(activation_module)
         self.depth_encoder = self._build_depth_encoder(activation_module)
         self.mixer = self._build_mixer(activation_module)
-        self.height_decoder = self._build_height_decoder(activation_module, rnn_hidden_size)
-        self.reconstructed_height_map = None
+        self.terrain_decoder = self._build_terrain_decoder(activation_module, rnn_hidden_size)
+        self.reconstructed_terrain_obs = None
         self.memory_a = Memory(
             self.mixer_latent_dim,
             type=rnn_type,
@@ -98,7 +99,7 @@ class ActorCriticRecurrent(ActorCritic):
         print(f"Actor depth encoder: {self.depth_encoder}")
         print(f"Mixer: {self.mixer}")
         print(f"Actor GRU: {self.memory_a}")
-        print(f"Height decoder: {self.height_decoder}")
+        print(f"Terrain decoder: {self.terrain_decoder}")
 
     def _build_history_encoder(self, activation):
         return nn.Sequential(
@@ -141,11 +142,11 @@ class ActorCriticRecurrent(ActorCritic):
             nn.Linear(64, self.mixer_latent_dim),
         )
 
-    def _build_height_decoder(self, activation, rnn_hidden_size):
+    def _build_terrain_decoder(self, activation, rnn_hidden_size):
         return nn.Sequential(
             nn.Linear(rnn_hidden_size, 64),
             self._clone_activation(activation),
-            nn.Linear(64, self.height_dim),
+            nn.Linear(64, self.reconstruction_dim),
         )
 
     def _encode_history(self, proprio_history):
@@ -173,7 +174,7 @@ class ActorCriticRecurrent(ActorCritic):
         depth_latent = self._encode_depth(obs["depth_image"])
         mixer_latent = self.mixer(torch.cat([history_latent, depth_latent], dim=-1))
         z = self.memory_a(mixer_latent, masks, hidden_states)
-        self.reconstructed_height_map = self.height_decoder(z)
+        self.reconstructed_terrain_obs = self.terrain_decoder(z)
 
         noisy_proprio = obs["curr_proprio_noisy"]
         goal = obs["goal"]
@@ -198,10 +199,11 @@ class ActorCriticRecurrent(ActorCritic):
         return velocity_loss + contact_loss
 
     def height_reconstruction_loss(self, observations, masks=None):
-        target = self._split_observations(observations)["height_scan"]
+        obs = self._split_observations(observations)
+        target = torch.cat([obs["height_scan"], obs["ladder_info"]], dim=-1)
         if masks is not None:
             target = unpad_trajectories(target, masks)
-        return torch.mean((self.reconstructed_height_map - target) ** 2)
+        return torch.mean((self.reconstructed_terrain_obs - target) ** 2)
 
     def update_distribution(self, observations, masks=None, hidden_states=None):
         mean = self.actor(self._build_actor_input(observations, masks, hidden_states))
