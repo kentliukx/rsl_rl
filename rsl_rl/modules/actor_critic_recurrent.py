@@ -60,7 +60,7 @@ class ActorCriticRecurrent(ActorCritic):
         self.history_latent_dim = history_latent_dim
         self.depth_latent_dim = depth_latent_dim
         self.mixer_latent_dim = mixer_latent_dim
-        self.estimator_dim = 7
+        self.estimator_dim = 14
         actor_input_dim = 42 + 3 + self.estimator_dim + rnn_hidden_size
 
         super().__init__(
@@ -113,11 +113,11 @@ class ActorCriticRecurrent(ActorCritic):
 
     def _build_estimator(self, activation):
         return nn.Sequential(
-            nn.Linear(self.history_latent_dim, 32),
+            nn.Linear(self.history_latent_dim, 64),
             self._clone_activation(activation),
-            nn.Linear(32, 16),
+            nn.Linear(64, 32),
             self._clone_activation(activation),
-            nn.Linear(16, self.estimator_dim),
+            nn.Linear(32, self.estimator_dim),
         )
 
     def _build_depth_encoder(self, activation):
@@ -167,8 +167,12 @@ class ActorCriticRecurrent(ActorCritic):
         obs = self._split_observations(observations)
         history_latent = self._encode_history(obs["proprio_history"])
         estimator_output = self.estimator(history_latent)
-        estimated_velocity_contact = torch.cat(
-            [estimator_output[..., :3], torch.sigmoid(estimator_output[..., 3:])],
+        estimated_state = torch.cat(
+            [
+                estimator_output[..., :3],
+                torch.sigmoid(estimator_output[..., 3:7]),
+                estimator_output[..., 7:14],
+            ],
             dim=-1,
         )
         depth_latent = self._encode_depth(obs["depth_image"])
@@ -181,22 +185,34 @@ class ActorCriticRecurrent(ActorCritic):
         if masks is not None:
             noisy_proprio = unpad_trajectories(noisy_proprio, masks)
             goal = unpad_trajectories(goal, masks)
-            estimated_velocity_contact = unpad_trajectories(estimated_velocity_contact, masks)
-        return torch.cat([noisy_proprio, goal, estimated_velocity_contact, z], dim=-1)
+            estimated_state = unpad_trajectories(estimated_state, masks)
+        return torch.cat([noisy_proprio, goal, estimated_state, z], dim=-1)
 
     def estimator_loss(self, observations, masks=None):
         obs = self._split_observations(observations)
         prediction = self.estimator(self._encode_history(obs["proprio_history"]))
-        target = torch.cat([obs["base_lin_vel"], obs["foot_contacts"]], dim=-1)
+        target = torch.cat(
+            [
+                obs["base_lin_vel"],
+                obs["foot_contacts"],
+                obs["applied_force"],
+                obs["applied_torque"],
+                obs["friction"],
+            ],
+            dim=-1,
+        )
         if masks is not None:
             prediction = unpad_trajectories(prediction, masks)
             target = unpad_trajectories(target, masks)
         velocity_loss = torch.mean((prediction[..., :3] - target[..., :3]) ** 2)
         contact_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            prediction[..., 3:],
-            target[..., 3:],
+            prediction[..., 3:7],
+            target[..., 3:7],
         )
-        return velocity_loss + contact_loss
+        force_loss = torch.mean((prediction[..., 7:10] - target[..., 7:10]) ** 2)
+        torque_loss = torch.mean((prediction[..., 10:13] - target[..., 10:13]) ** 2)
+        friction_loss = torch.mean((prediction[..., 13:] - target[..., 13:]) ** 2)
+        return velocity_loss + contact_loss + force_loss + torque_loss + friction_loss
 
     def height_reconstruction_loss(self, observations, masks=None):
         obs = self._split_observations(observations)
