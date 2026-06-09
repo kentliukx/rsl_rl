@@ -200,10 +200,17 @@ class ActorCriticRecurrent(ActorCritic):
 
     def height_reconstruction_loss(self, observations, masks=None):
         obs = self._split_observations(observations)
-        target = torch.cat([obs["height_scan"], obs["ladder_info"]], dim=-1)
+        height_target = obs["height_scan"]
+        ladder_target = obs["ladder_info"]
         if masks is not None:
-            target = unpad_trajectories(target, masks)
-        return torch.mean((self.reconstructed_terrain_obs - target) ** 2)
+            height_target = unpad_trajectories(height_target, masks)
+            ladder_target = unpad_trajectories(ladder_target, masks)
+
+        height_prediction = self.reconstructed_terrain_obs[..., :self.height_dim]
+        ladder_prediction = self.reconstructed_terrain_obs[..., self.height_dim:]
+        height_loss = torch.mean((height_prediction - height_target) ** 2)
+        ladder_loss = torch.mean((ladder_prediction - ladder_target) ** 2)
+        return height_loss + ladder_loss
 
     def update_distribution(self, observations, masks=None, hidden_states=None):
         mean = self.actor(self._build_actor_input(observations, masks, hidden_states))
