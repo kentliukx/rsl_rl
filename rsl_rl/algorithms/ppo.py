@@ -122,7 +122,7 @@ class PPO:
         self.imitation_loss_coef = self.imitation_loss_max_coef + reward_progress * (
             self.imitation_loss_min_coef - self.imitation_loss_max_coef
         )
-        self.policy_loss_coef = reward_progress
+        self.policy_loss_coef = 1 - self.imitation_loss_coef
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
