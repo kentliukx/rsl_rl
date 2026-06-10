@@ -216,7 +216,7 @@ class ActorCriticRecurrent(ActorCritic):
 
     def height_reconstruction_loss(self, observations, masks=None):
         obs = self._split_observations(observations)
-        height_target = obs["height_scan"]
+        height_target = obs["height_scan_simplified"]
         ladder_target = obs["ladder_info"]
         if masks is not None:
             height_target = unpad_trajectories(height_target, masks)
@@ -324,7 +324,7 @@ class TeacherPolicy(nn.Module):
                 observations[..., 2190:2194],
                 observations[..., 2204:2208],
                 observations[..., 2208:2212],
-                observations[..., 2443:2448],
+                observations[..., 2674:2679],
                 observations[..., 2194:2204],
             ],
             dim=-1,
