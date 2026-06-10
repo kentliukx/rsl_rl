@@ -174,12 +174,15 @@ class PPO:
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
+            old_mu_batch, old_sigma_batch, hid_states_batch, recurrent_dones_batch in generator:
 
-
-                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
+                self.actor_critic.act(
+                    obs_batch,
+                    hidden_states=hid_states_batch[0],
+                    dones=recurrent_dones_batch if self.actor_critic.is_recurrent else None,
+                )
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
-                value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+                value_batch = self.actor_critic.evaluate(critic_obs_batch, hidden_states=hid_states_batch[1])
                 mu_batch = self.actor_critic.action_mean
                 sigma_batch = self.actor_critic.action_std
                 entropy_batch = self.actor_critic.entropy
@@ -218,16 +221,16 @@ class PPO:
                     value_loss = (returns_batch - value_batch).pow(2).mean()
 
                 if hasattr(self.actor_critic, "estimator_loss"):
-                    estimator_loss = self.actor_critic.estimator_loss(obs_batch, masks_batch)
+                    estimator_loss = self.actor_critic.estimator_loss(obs_batch)
                 else:
                     estimator_loss = torch.zeros((), device=self.device)
                 if hasattr(self.actor_critic, "height_reconstruction_loss"):
-                    height_reconstruction_loss = self.actor_critic.height_reconstruction_loss(obs_batch, masks_batch)
+                    height_reconstruction_loss = self.actor_critic.height_reconstruction_loss(obs_batch)
                 else:
                     height_reconstruction_loss = torch.zeros((), device=self.device)
                 if self.teacher is not None:
                     with torch.inference_mode():
-                        teacher_mu, teacher_sigma = self.teacher.distribution_parameters(obs_batch, masks_batch)
+                        teacher_mu, teacher_sigma = self.teacher.distribution_parameters(obs_batch)
                     student_sigma = sigma_batch.clamp_min(1e-6)
                     teacher_sigma = teacher_sigma.clamp_min(1e-6)
                     imitation_loss = torch.mean(torch.sum(

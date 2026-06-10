@@ -37,7 +37,7 @@ from torch.distributions import Normal
 from torch.nn.modules import rnn
 
 from .actor_critic import ActorCritic, get_activation
-from rsl_rl.utils import unpad_trajectories
+from rsl_rl.utils import split_and_pad_trajectories, unpad_trajectories
 
 class ActorCriticRecurrent(ActorCritic):
     is_recurrent = True
@@ -163,7 +163,8 @@ class ActorCriticRecurrent(ActorCritic):
         depth = depth_image.reshape(-1, 1, self.depth_height, self.depth_width)
         return self.depth_encoder(depth).reshape(*leading_shape, self.depth_latent_dim)
 
-    def _build_actor_input(self, observations, masks=None, hidden_states=None):
+    def _build_actor_input(self, observations, masks=None, hidden_states=None, dones=None):
+        observations_are_padded = masks is not None and dones is None
         obs = self._split_observations(observations)
         history_latent = self._encode_history(obs["proprio_history"])
         estimator_output = self.estimator(history_latent)
@@ -177,12 +178,18 @@ class ActorCriticRecurrent(ActorCritic):
         )
         depth_latent = self._encode_depth(obs["depth_image"])
         mixer_latent = self.mixer(torch.cat([history_latent, depth_latent], dim=-1))
-        z = self.memory_a(mixer_latent, masks, hidden_states)
+        if dones is not None:
+            # Padding after feature extraction avoids duplicating the full
+            # observation tensor during recurrent PPO updates.
+            padded_mixer_latent, masks = split_and_pad_trajectories(mixer_latent, dones)
+            z = self.memory_a(padded_mixer_latent, masks, hidden_states)
+        else:
+            z = self.memory_a(mixer_latent, masks, hidden_states)
         self.reconstructed_terrain_obs = self.terrain_decoder(z)
 
         noisy_proprio = obs["curr_proprio_noisy"]
         goal = obs["goal"]
-        if masks is not None:
+        if observations_are_padded:
             noisy_proprio = unpad_trajectories(noisy_proprio, masks)
             goal = unpad_trajectories(goal, masks)
             estimated_state = unpad_trajectories(estimated_state, masks)
@@ -228,12 +235,12 @@ class ActorCriticRecurrent(ActorCritic):
         ladder_loss = torch.mean((ladder_prediction - ladder_target) ** 2)
         return height_loss + ladder_loss
 
-    def update_distribution(self, observations, masks=None, hidden_states=None):
-        mean = self.actor(self._build_actor_input(observations, masks, hidden_states))
+    def update_distribution(self, observations, masks=None, hidden_states=None, dones=None):
+        mean = self.actor(self._build_actor_input(observations, masks, hidden_states, dones))
         self.distribution = torch.distributions.Normal(mean, mean * 0.0 + self.std)
 
-    def act(self, observations, masks=None, hidden_states=None):
-        self.update_distribution(observations, masks, hidden_states)
+    def act(self, observations, masks=None, hidden_states=None, dones=None):
+        self.update_distribution(observations, masks, hidden_states, dones)
         return self.distribution.sample()
 
     def act_inference(self, observations):

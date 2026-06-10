@@ -31,8 +31,6 @@
 import torch
 import numpy as np
 
-from rsl_rl.utils import split_and_pad_trajectories
-
 class RolloutStorage:
     class Transition:
         def __init__(self):
@@ -184,13 +182,6 @@ class RolloutStorage:
 
     # for RNNs only
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
-
-        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
-        if self.privileged_observations is not None: 
-            padded_critic_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
-        else: 
-            padded_critic_obs_trajectories = padded_obs_trajectories
-
         mini_batch_size = self.num_envs // num_mini_batches
         for ep in range(num_epochs):
             first_traj = 0
@@ -204,10 +195,15 @@ class RolloutStorage:
                 last_was_done[0] = True
                 trajectories_batch_size = torch.sum(last_was_done[:, start:stop])
                 last_traj = first_traj + trajectories_batch_size
-                
-                masks_batch = trajectory_masks[:, first_traj:last_traj]
-                obs_batch = padded_obs_trajectories[:, first_traj:last_traj]
-                critic_obs_batch = padded_critic_obs_trajectories[:, first_traj:last_traj]
+
+                # Keep high-dimensional observations unpadded. The policy pads
+                # only its compact recurrent latent immediately before the RNN.
+                obs_batch = self.observations[:, start:stop]
+                if self.privileged_observations is not None:
+                    critic_obs_batch = self.privileged_observations[:, start:stop]
+                else:
+                    critic_obs_batch = obs_batch
+                dones_batch = self.dones[:, start:stop]
 
                 actions_batch = self.actions[:, start:stop]
                 old_mu_batch = self.mu[:, start:stop]
@@ -230,6 +226,6 @@ class RolloutStorage:
                 hid_c_batch = hid_c_batch[0] if len(hid_c_batch)==1 else hid_a_batch
 
                 yield obs_batch, critic_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch
+                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), dones_batch
                 
                 first_traj = last_traj
