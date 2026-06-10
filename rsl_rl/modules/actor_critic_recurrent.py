@@ -146,7 +146,9 @@ class ActorCriticRecurrent(ActorCritic):
         return nn.Sequential(
             nn.Linear(rnn_hidden_size, 64),
             self._clone_activation(activation),
-            nn.Linear(64, self.reconstruction_dim),
+            nn.Linear(64, 128),
+            self._clone_activation(activation),
+            nn.Linear(128, self.reconstruction_dim),
         )
 
     def _encode_history(self, proprio_history):
@@ -223,17 +225,14 @@ class ActorCriticRecurrent(ActorCritic):
 
     def height_reconstruction_loss(self, observations, masks=None):
         obs = self._split_observations(observations)
-        height_target = obs["height_scan_simplified"]
+        height_target = obs["height_scan"]
         ladder_target = obs["ladder_info"]
         if masks is not None:
             height_target = unpad_trajectories(height_target, masks)
             ladder_target = unpad_trajectories(ladder_target, masks)
 
-        height_prediction = self.reconstructed_terrain_obs[..., :self.height_dim]
-        ladder_prediction = self.reconstructed_terrain_obs[..., self.height_dim:]
-        height_loss = torch.mean((height_prediction - height_target) ** 2)
-        ladder_loss = torch.mean((ladder_prediction - ladder_target) ** 2)
-        return height_loss + ladder_loss
+        terrain_target = torch.cat((height_target, ladder_target), dim=-1)
+        return torch.mean((self.reconstructed_terrain_obs - terrain_target) ** 2)
 
     def update_distribution(self, observations, masks=None, hidden_states=None, dones=None):
         mean = self.actor(self._build_actor_input(observations, masks, hidden_states, dones))
