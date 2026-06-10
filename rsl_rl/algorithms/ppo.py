@@ -53,7 +53,7 @@ class PPO:
                  desired_kl=0.01,
                  estimator_loss_coef=1,
                  height_reconstruction_loss_coef=1,
-                 imitation_loss_coef=1.0,
+                 imitation_loss_coef=0.1,
                  imitation_loss_min_coef=0.0,
                  imitation_reward_lower=0.0,
                  imitation_reward_upper=30.0,
@@ -163,12 +163,25 @@ class PPO:
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
+    @staticmethod
+    def _mean_abs_gradient(loss, tensors, coefficient):
+        gradients = torch.autograd.grad(loss, tensors, retain_graph=True, allow_unused=True)
+        gradients = [gradient for gradient in gradients if gradient is not None]
+        if not gradients:
+            return 0.0
+        absolute_gradient_sum = sum(gradient.detach().abs().sum().item() for gradient in gradients)
+        num_gradient_elements = sum(gradient.numel() for gradient in gradients)
+        num_samples = gradients[0].numel() // gradients[0].shape[-1]
+        return absolute_gradient_sum / num_gradient_elements * num_samples * abs(coefficient)
+
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_estimator_loss = 0
         mean_height_reconstruction_loss = 0
         mean_imitation_loss = 0
+        mean_rl_policy_gradient = 0
+        mean_imitation_gradient = 0
         if self.actor_critic.is_recurrent:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
@@ -250,6 +263,18 @@ class PPO:
                     - self.entropy_coef * entropy_batch.mean()
                 )
 
+                mean_rl_policy_gradient += self._mean_abs_gradient(
+                    surrogate_loss,
+                    (mu_batch, sigma_batch),
+                    self.policy_loss_coef,
+                )
+                if self.teacher is not None and self.imitation_loss_coef != 0.0:
+                    mean_imitation_gradient += self._mean_abs_gradient(
+                        imitation_loss,
+                        (mu_batch, sigma_batch),
+                        self.imitation_loss_coef,
+                    )
+
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -268,6 +293,16 @@ class PPO:
         mean_estimator_loss /= num_updates
         mean_height_reconstruction_loss /= num_updates
         mean_imitation_loss /= num_updates
+        mean_rl_policy_gradient /= num_updates
+        mean_imitation_gradient /= num_updates
         self.storage.clear()
 
-        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss
+        return (
+            mean_value_loss,
+            mean_surrogate_loss,
+            mean_estimator_loss,
+            mean_height_reconstruction_loss,
+            mean_imitation_loss,
+            mean_rl_policy_gradient,
+            mean_imitation_gradient,
+        )
