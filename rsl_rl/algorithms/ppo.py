@@ -53,11 +53,12 @@ class PPO:
                  desired_kl=0.01,
                  estimator_loss_coef=1,
                  height_reconstruction_loss_coef=1,
-                 imitation_loss_coef=0.1,
+                 imitation_loss_coef=0.05,
                  imitation_loss_min_coef=0.0,
                  imitation_reward_lower=0.0,
                  imitation_reward_upper=30.0,
                  imitation_reward_lpf_k=0.2,
+                 teacher_actions_no_rl=False,
                  device='cpu',
                  ):
 
@@ -96,6 +97,7 @@ class PPO:
         self.imitation_reward_ema = None
         self.imitation_best_reward = None
         self.teacher = None
+        self.teacher_actions_no_rl = teacher_actions_no_rl
 
     def set_teacher(self, teacher):
         self.teacher = teacher
@@ -136,6 +138,19 @@ class PPO:
     def act(self, obs, critic_obs):
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
+        if self.teacher_actions_no_rl:
+            if self.teacher is None:
+                raise RuntimeError("teacher_actions_no_rl requires a teacher policy")
+            self.actor_critic.act(obs)
+            teacher_mean, teacher_sigma = self.teacher.distribution_parameters(obs)
+            self.transition.actions = teacher_mean.detach()
+            self.transition.values = torch.zeros(obs.shape[0], 1, device=self.device)
+            self.transition.actions_log_prob = torch.zeros(obs.shape[0], device=self.device)
+            self.transition.action_mean = teacher_mean.detach()
+            self.transition.action_sigma = teacher_sigma.detach()
+            self.transition.observations = obs
+            self.transition.critic_observations = critic_obs
+            return self.transition.actions
         # Compute the actions and values
         self.transition.actions = self.actor_critic.act(obs).detach()
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
@@ -160,6 +175,8 @@ class PPO:
         self.actor_critic.reset(dones)
     
     def compute_returns(self, last_critic_obs):
+        if self.teacher_actions_no_rl:
+            return
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
@@ -175,6 +192,9 @@ class PPO:
         return absolute_gradient_sum / num_gradient_elements * num_samples * abs(coefficient)
 
     def update(self):
+        if self.teacher_actions_no_rl:
+            return self._update_without_rl()
+
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_estimator_loss = 0
@@ -305,4 +325,63 @@ class PPO:
             mean_imitation_loss,
             mean_rl_policy_gradient,
             mean_imitation_gradient,
+        )
+
+    def _update_without_rl(self):
+        mean_estimator_loss = 0.0
+        mean_height_reconstruction_loss = 0.0
+        mean_imitation_loss = 0.0
+        if self.actor_critic.is_recurrent:
+            generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        else:
+            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+
+        for obs_batch, _, _, _, _, _, _, _, _, hid_states_batch, recurrent_dones_batch in generator:
+            self.actor_critic.act(
+                obs_batch,
+                hidden_states=hid_states_batch[0],
+                dones=recurrent_dones_batch if self.actor_critic.is_recurrent else None,
+            )
+            mu_batch = self.actor_critic.action_mean
+            sigma_batch = self.actor_critic.action_std
+            estimator_loss = self.actor_critic.estimator_loss(obs_batch)
+            height_reconstruction_loss = self.actor_critic.height_reconstruction_loss(obs_batch)
+            with torch.inference_mode():
+                teacher_mu, teacher_sigma = self.teacher.distribution_parameters(obs_batch)
+            student_sigma = sigma_batch.clamp_min(1e-6)
+            teacher_sigma = teacher_sigma.clamp_min(1e-6)
+            imitation_loss = torch.mean(torch.sum(
+                torch.log(student_sigma / teacher_sigma)
+                + (teacher_sigma.square() + (teacher_mu - mu_batch).square()) / (2.0 * student_sigma.square())
+                - 0.5,
+                dim=-1,
+            ))
+            loss = (
+                self.estimator_loss_coef * estimator_loss
+                + self.height_reconstruction_loss_coef * height_reconstruction_loss
+                + self.imitation_loss_coef * imitation_loss
+            )
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            self.optimizer.step()
+
+            mean_estimator_loss += estimator_loss.item()
+            mean_height_reconstruction_loss += height_reconstruction_loss.item()
+            mean_imitation_loss += imitation_loss.item()
+
+        num_updates = self.num_learning_epochs * self.num_mini_batches
+        mean_estimator_loss /= num_updates
+        mean_height_reconstruction_loss /= num_updates
+        mean_imitation_loss /= num_updates
+        self.storage.clear()
+        return (
+            0.0,
+            0.0,
+            mean_estimator_loss,
+            mean_height_reconstruction_loss,
+            mean_imitation_loss,
+            0.0,
+            0.0,
         )

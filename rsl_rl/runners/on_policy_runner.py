@@ -80,8 +80,8 @@ class OnPolicyRunner:
         self.current_learning_iteration = 0
 
         _, _ = self.env.reset()
-    
-    def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+
+    def load_teacher_policy(self):
         if self.teacher_checkpoint and self.alg.teacher is None:
             teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
             teacher = TeacherPolicy(
@@ -92,6 +92,12 @@ class OnPolicyRunner:
             teacher.load(teacher_checkpoint)
             self.alg.set_teacher(teacher)
             print(f"Loaded teacher policy from: {teacher_checkpoint}")
+        return self.alg.teacher
+
+    def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        self.load_teacher_policy()
+        if self.alg.teacher_actions_no_rl:
+            print("Teacher-action training: no RL losses; estimator, reconstruction, and imitation losses enabled.")
         # initialize writer
         if self.log_dir is not None and self.writer is None:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -140,7 +146,7 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            if len(rewbuffer) > 0:
+            if len(rewbuffer) > 0 and not self.alg.teacher_actions_no_rl:
                 self.alg.update_imitation_coefficient(statistics.mean(rewbuffer))
             mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss, \
                 mean_rl_policy_gradient, mean_imitation_gradient = self.alg.update()
