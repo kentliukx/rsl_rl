@@ -47,7 +47,7 @@ class ActorCriticRecurrent(ActorCritic):
                         actor_hidden_dims=[256, 256, 256],
                         critic_hidden_dims=[256, 256, 256],
                         activation='elu',
-                        history_length=50,
+                        history_length=10,
                         history_latent_dim=32,
                         depth_latent_dim=32,
                         mixer_latent_dim=32,
@@ -76,7 +76,7 @@ class ActorCriticRecurrent(ActorCritic):
         )
 
         activation_module = get_activation(activation)
-        self.proprio_history_len = 50
+        self.proprio_history_len = history_length
         self.depth_height = 36
         self.depth_width = 64
         self.reconstruction_dim = self.height_dim + self.ladder_info_dim
@@ -103,11 +103,11 @@ class ActorCriticRecurrent(ActorCritic):
 
     def _build_history_encoder(self, activation):
         return nn.Sequential(
-            nn.Linear(self.history_length * self.proprio_dim, 256),
+            nn.Linear(self.history_length * self.proprio_dim, 128),
             self._clone_activation(activation),
-            nn.Linear(256, 128),
+            nn.Linear(128, 64),
             self._clone_activation(activation),
-            nn.Linear(128, self.history_latent_dim),
+            nn.Linear(64, self.history_latent_dim),
             self._clone_activation(activation),
         )
 
@@ -140,6 +140,7 @@ class ActorCriticRecurrent(ActorCritic):
             nn.Linear(128, 64),
             self._clone_activation(activation),
             nn.Linear(64, self.mixer_latent_dim),
+            self._clone_activation(activation),
         )
 
     def _build_terrain_decoder(self, activation, rnn_hidden_size):
@@ -324,19 +325,19 @@ class TeacherPolicy(nn.Module):
 
     def act_inference(self, observations, masks=None):
         goal = observations[..., 0:3]
-        proprio = torch.cat([observations[..., 2187:2190], observations[..., 3:45]], dim=-1)
+        proprio = torch.cat([observations[..., 507:510], observations[..., 3:45]], dim=-1)
         privileged = torch.cat(
             [
-                observations[..., 2190:2194],
-                observations[..., 2204:2208],
-                observations[..., 2208:2212],
-                observations[..., 2674:2679],
-                observations[..., 2194:2204],
+                observations[..., 510:514],
+                observations[..., 524:528],
+                observations[..., 528:532],
+                observations[..., 994:999],
+                observations[..., 514:524],
             ],
             dim=-1,
         )
         privileged_latent = self.privileged_encoder(privileged)
-        height_latent = self.height_encoder(observations[..., 2212:2443])
+        height_latent = self.height_encoder(observations[..., 532:763])
         actions = self.actor(torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1))
         if masks is not None:
             actions = unpad_trajectories(actions, masks)
