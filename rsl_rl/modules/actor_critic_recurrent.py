@@ -140,7 +140,6 @@ class ActorCriticRecurrent(ActorCritic):
             nn.Linear(128, 64),
             self._clone_activation(activation),
             nn.Linear(64, self.mixer_latent_dim),
-            self._clone_activation(activation),
         )
 
     def _build_terrain_decoder(self, activation, rnn_hidden_size):
