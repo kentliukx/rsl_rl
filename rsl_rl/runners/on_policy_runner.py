@@ -81,6 +81,21 @@ class OnPolicyRunner:
 
         _, _ = self.env.reset()
 
+    @staticmethod
+    def _to_scalar(value):
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 0:
+                return None
+            return value.float().mean().item()
+        if isinstance(value, (list, tuple)):
+            if len(value) == 0:
+                return None
+            tensor = torch.as_tensor(value, dtype=torch.float32)
+            return tensor.mean().item()
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
     def load_teacher_policy(self):
         if self.teacher_checkpoint and self.alg.teacher is None:
             teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
@@ -112,6 +127,7 @@ class OnPolicyRunner:
         ep_infos = []
         rewbuffer = deque(maxlen=100)
         lenbuffer = deque(maxlen=100)
+        episode_terrain_level_buffer = deque(maxlen=100)
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
@@ -126,6 +142,15 @@ class OnPolicyRunner:
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
                     self.alg.process_env_step(rewards, dones, infos)
+                    if 'episode' in infos:
+                        episode_info = infos['episode']
+                        terrain_level = None
+                        for key in ("terrain_level", "terrain_level_mean", "terrain_levels"):
+                            if key in episode_info:
+                                terrain_level = self._to_scalar(episode_info[key])
+                                if terrain_level is not None:
+                                    episode_terrain_level_buffer.append(terrain_level)
+                                    break
                     
                     if self.log_dir is not None:
                         # Book keeping
@@ -146,8 +171,9 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            if len(rewbuffer) > 0 and not self.alg.teacher_actions_no_rl:
-                self.alg.update_imitation_coefficient(statistics.mean(rewbuffer))
+            if not self.alg.teacher_actions_no_rl:
+                mean_terrain_level = statistics.mean(episode_terrain_level_buffer) if len(episode_terrain_level_buffer) > 0 else None
+                self.alg.update_imitation_coefficient(mean_terrain_level)
             mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss, \
                 mean_rl_policy_gradient, mean_imitation_gradient = self.alg.update()
             stop = time.time()
@@ -256,8 +282,7 @@ class OnPolicyRunner:
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'iter': self.current_learning_iteration,
-            'imitation_reward_ema': self.alg.imitation_reward_ema,
-            'imitation_best_reward': self.alg.imitation_best_reward,
+            'imitation_terrain_level_ema': self.alg.imitation_terrain_level_ema,
             'imitation_loss_coef': self.alg.imitation_loss_coef,
             'policy_loss_coef': self.alg.policy_loss_coef,
             'infos': infos,
@@ -268,8 +293,7 @@ class OnPolicyRunner:
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
-        self.alg.imitation_reward_ema = loaded_dict.get('imitation_reward_ema')
-        self.alg.imitation_best_reward = loaded_dict.get('imitation_best_reward')
+        self.alg.imitation_terrain_level_ema = loaded_dict.get('imitation_terrain_level_ema')
         self.alg.imitation_loss_coef = loaded_dict.get('imitation_loss_coef', self.alg.imitation_loss_coef)
         self.alg.policy_loss_coef = loaded_dict.get('policy_loss_coef', self.alg.policy_loss_coef)
         self.current_learning_iteration = loaded_dict['iter']

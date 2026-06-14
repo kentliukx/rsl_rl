@@ -54,10 +54,10 @@ class PPO:
                  estimator_loss_coef=1,
                  height_reconstruction_loss_coef=200,
                  imitation_loss_coef=0.1,
-                 imitation_loss_min_coef=0.1,
-                 imitation_reward_lower=0.0,
-                 imitation_reward_upper=30.0,
-                 imitation_reward_lpf_k=0.2,
+                 imitation_loss_min_coef=0.0,
+                 imitation_terrain_level_lower=1.0,
+                 imitation_terrain_level_upper=3.0,
+                 imitation_terrain_level_lpf_k=0.2,
                  teacher_actions_no_rl=False,
                  device='cpu',
                  ):
@@ -91,11 +91,10 @@ class PPO:
         self.imitation_loss_min_coef = imitation_loss_min_coef
         self.imitation_loss_coef = imitation_loss_coef
         self.policy_loss_coef = 1.0
-        self.imitation_reward_lower = imitation_reward_lower
-        self.imitation_reward_upper = imitation_reward_upper
-        self.imitation_reward_lpf_k = imitation_reward_lpf_k
-        self.imitation_reward_ema = None
-        self.imitation_best_reward = None
+        self.imitation_terrain_level_lower = imitation_terrain_level_lower
+        self.imitation_terrain_level_upper = imitation_terrain_level_upper
+        self.imitation_terrain_level_lpf_k = imitation_terrain_level_lpf_k
+        self.imitation_terrain_level_ema = None
         self.teacher = None
         self.teacher_actions_no_rl = teacher_actions_no_rl
 
@@ -103,25 +102,22 @@ class PPO:
         self.teacher = teacher
         self.policy_loss_coef = 0.0
 
-    def update_imitation_coefficient(self, mean_reward):
+    def update_imitation_coefficient(self, mean_terrain_level):
         if self.teacher is None:
             self.imitation_loss_coef = 0.0
             self.policy_loss_coef = 1.0
             return
-        if self.imitation_reward_ema is None:
-            self.imitation_reward_ema = mean_reward
+        if mean_terrain_level is None:
+            return
+        if self.imitation_terrain_level_ema is None:
+            self.imitation_terrain_level_ema = mean_terrain_level
         else:
-            k = self.imitation_reward_lpf_k
-            self.imitation_reward_ema = (1.0 - k) * self.imitation_reward_ema + k * mean_reward
-        if self.imitation_best_reward is None:
-            self.imitation_best_reward = self.imitation_reward_ema
-        else:
-            self.imitation_best_reward = max(self.imitation_best_reward, self.imitation_reward_ema)
-        reward_progress = (self.imitation_best_reward - self.imitation_reward_lower) / (
-            self.imitation_reward_upper - self.imitation_reward_lower
-        )
-        reward_progress = min(max(reward_progress, 0.0), 1.0)
-        self.imitation_loss_coef = self.imitation_loss_max_coef + reward_progress * (
+            k = self.imitation_terrain_level_lpf_k
+            self.imitation_terrain_level_ema = (1.0 - k) * self.imitation_terrain_level_ema + k * mean_terrain_level
+        terrain_span = max(self.imitation_terrain_level_upper - self.imitation_terrain_level_lower, 1e-6)
+        terrain_progress = (self.imitation_terrain_level_ema - self.imitation_terrain_level_lower) / terrain_span
+        terrain_progress = min(max(terrain_progress, 0.0), 1.0)
+        self.imitation_loss_coef = self.imitation_loss_max_coef + terrain_progress * (
             self.imitation_loss_min_coef - self.imitation_loss_max_coef
         )
         self.policy_loss_coef = 1 - self.imitation_loss_coef
