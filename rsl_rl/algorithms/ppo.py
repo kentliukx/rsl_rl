@@ -52,7 +52,7 @@ class PPO:
                  schedule="adaptive",
                  desired_kl=0.01,
                  estimator_loss_coef=1,
-                 height_reconstruction_loss_coef=200,
+                 height_reconstruction_loss_coef=1000,
                  imitation_loss_coef=0.1,
                  imitation_loss_min_coef=0.0,
                  imitation_terrain_level_lower=1.0,
