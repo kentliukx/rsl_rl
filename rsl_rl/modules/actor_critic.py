@@ -69,9 +69,8 @@ class ActorCritic(nn.Module):
             "feet_air_time": slice(524, 528),
             "phase_feet_ground_time": slice(528, 532),
             "height_scan": slice(532, 763),
-            "height_scan_simplified": slice(763, 994),
-            "ladder_info": slice(994, 999),
-            "depth_image": slice(999, 3303),
+            "ladder_info": slice(763, 768),
+            "depth_image": slice(768, 3072),
         }
 
         self.proprio_dim = 42

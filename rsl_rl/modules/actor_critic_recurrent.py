@@ -330,7 +330,7 @@ class TeacherPolicy(nn.Module):
                 observations[..., 510:514],
                 observations[..., 524:528],
                 observations[..., 528:532],
-                observations[..., 994:999],
+                observations[..., 763:768],
                 observations[..., 514:524],
             ],
             dim=-1,
