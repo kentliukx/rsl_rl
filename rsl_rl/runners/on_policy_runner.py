@@ -293,6 +293,7 @@ class OnPolicyRunner:
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
+            self.alg.learning_rate = self.alg.optimizer.param_groups[0]['lr']
         self.alg.imitation_terrain_level_ema = loaded_dict.get('imitation_terrain_level_ema')
         self.alg.imitation_loss_coef = loaded_dict.get('imitation_loss_coef', self.alg.imitation_loss_coef)
         self.alg.policy_loss_coef = loaded_dict.get('policy_loss_coef', self.alg.policy_loss_coef)
