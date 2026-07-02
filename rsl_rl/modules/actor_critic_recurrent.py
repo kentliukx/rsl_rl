@@ -78,7 +78,7 @@ class ActorCriticRecurrent(ActorCritic):
         activation_module = get_activation(activation)
         self.proprio_history_len = history_length
         self.depth_height = 36
-        self.depth_width = 64
+        self.depth_width = 54
         self.reconstruction_dim = self.height_dim + self.ladder_info_dim
 
         self.history_encoder = self._build_history_encoder(activation_module)
@@ -129,7 +129,7 @@ class ActorCriticRecurrent(ActorCritic):
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             self._clone_activation(activation),
             nn.Flatten(),
-            nn.Linear(64 * 5 * 8, self.depth_latent_dim),
+            nn.Linear(64 * 5 * 7, self.depth_latent_dim),
             self._clone_activation(activation),
         )
 
