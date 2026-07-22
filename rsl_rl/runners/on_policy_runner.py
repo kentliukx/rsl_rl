@@ -37,7 +37,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch
 
 from rsl_rl.algorithms import PPO
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, TeacherPolicy
+from rsl_rl.modules import ActorCritic, StudentActorCritic, TeacherActorCritic, TeacherPolicy
 from rsl_rl.env import VecEnv
 
 
@@ -111,8 +111,6 @@ class OnPolicyRunner:
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         self.load_teacher_policy()
-        if self.alg.teacher_actions_no_rl:
-            print("Teacher-action training: no RL losses; estimator, reconstruction, and imitation losses enabled.")
         # initialize writer
         if self.log_dir is not None and self.writer is None:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -171,9 +169,8 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            if not self.alg.teacher_actions_no_rl:
-                mean_terrain_level = statistics.mean(episode_terrain_level_buffer) if len(episode_terrain_level_buffer) > 0 else None
-                self.alg.update_imitation_coefficient(mean_terrain_level)
+            mean_terrain_level = statistics.mean(episode_terrain_level_buffer) if len(episode_terrain_level_buffer) > 0 else None
+            self.alg.update_imitation_coefficient(mean_terrain_level)
             mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss, \
                 mean_rl_policy_gradient, mean_imitation_gradient = self.alg.update()
             stop = time.time()

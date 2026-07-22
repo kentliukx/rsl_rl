@@ -39,7 +39,7 @@ from torch.nn.modules import rnn
 from .actor_critic import ActorCritic, get_activation
 from rsl_rl.utils import split_and_pad_trajectories, unpad_trajectories
 
-class ActorCriticRecurrent(ActorCritic):
+class StudentActorCritic(ActorCritic):
     is_recurrent = True
     def __init__(self,  num_actor_obs,
                         num_critic_obs,
