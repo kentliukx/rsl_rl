@@ -62,21 +62,19 @@ class ActorCritic(nn.Module):
             "foot_contacts": slice(510, 514),
             "friction": slice(514, 515),
             "added_mass": slice(515, 516),
-            "p_gain": slice(516, 517),
-            "d_gain": slice(517, 518),
-            "applied_force": slice(518, 521),
-            "applied_torque": slice(521, 524),
-            "feet_air_time": slice(524, 528),
-            "phase_feet_ground_time": slice(528, 532),
-            "height_scan": slice(532, 763),
-            "ladder_info": slice(763, 768),
-            "depth_image": slice(768, 2712),
+            "applied_force": slice(516, 519),
+            "applied_torque": slice(519, 522),
+            "effector_ladder_plane_distance": slice(522, 526),
+            "effector_nearest_bar_distance": slice(526, 530),
+            "height_scan": slice(530, 761),
+            "ladder_info": slice(761, 766),
+            "depth_image": slice(766, 2710),
         }
 
         self.proprio_dim = 42
         self.goal_dim = 3
         self.ladder_info_dim = 5
-        self.privileged_dim = 30
+        self.privileged_dim = 28
         self.height_dim = 231
         self.height_latent_dim = 32
 
@@ -180,12 +178,10 @@ class ActorCritic(nn.Module):
                 obs["foot_contacts"],
                 obs["friction"],
                 obs["added_mass"],
-                obs["p_gain"],
-                obs["d_gain"],
                 obs["applied_force"],
                 obs["applied_torque"],
-                obs["feet_air_time"],
-                obs["phase_feet_ground_time"],
+                obs["effector_ladder_plane_distance"],
+                obs["effector_nearest_bar_distance"],
                 obs["ladder_info"],
             ],
             dim=-1,

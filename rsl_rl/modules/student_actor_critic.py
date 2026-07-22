@@ -287,13 +287,6 @@ class TeacherPolicy(nn.Module):
         activation = get_activation(activation)
         self.std = nn.Parameter(torch.ones(num_actions))
 
-        self.privileged_encoder = nn.Sequential(
-            nn.Linear(27, 32),
-            copy.deepcopy(activation),
-            nn.Linear(32, 24),
-            copy.deepcopy(activation),
-            nn.Linear(24, 16),
-        )
         self.height_encoder = nn.Sequential(
             nn.Linear(231, 128),
             copy.deepcopy(activation),
@@ -302,7 +295,7 @@ class TeacherPolicy(nn.Module):
             nn.Linear(64, 32),
         )
 
-        actor_layers = [nn.Linear(96, actor_hidden_dims[0]), copy.deepcopy(activation)]
+        actor_layers = [nn.Linear(105, actor_hidden_dims[0]), copy.deepcopy(activation)]
         for l in range(len(actor_hidden_dims)):
             if l == len(actor_hidden_dims) - 1:
                 actor_layers.append(nn.Linear(actor_hidden_dims[l], num_actions))
@@ -315,7 +308,7 @@ class TeacherPolicy(nn.Module):
         state_dict = torch.load(checkpoint, map_location="cpu")["model_state_dict"]
         teacher_state_dict = {
             key: value for key, value in state_dict.items()
-            if key == "std" or key.startswith(("privileged_encoder.", "height_encoder.", "actor."))
+            if key == "std" or key.startswith(("height_encoder.", "actor."))
         }
         self.load_state_dict(teacher_state_dict)
         self.eval()
@@ -324,20 +317,22 @@ class TeacherPolicy(nn.Module):
 
     def act_inference(self, observations, masks=None):
         goal = observations[..., 0:3]
-        proprio = torch.cat([observations[..., 507:510], observations[..., 3:45]], dim=-1)
         privileged = torch.cat(
             [
                 observations[..., 510:514],
-                observations[..., 524:528],
-                observations[..., 528:532],
-                observations[..., 763:768],
-                observations[..., 514:524],
+                observations[..., 522:526],  # effector-center to ladder plane
+                observations[..., 526:530],  # effector-center to nearest rung
+                observations[..., 514:516],  # friction and added mass
+                observations[..., 516:522],  # applied force and torque
+                observations[..., 761:766],
             ],
             dim=-1,
         )
-        privileged_latent = self.privileged_encoder(privileged)
-        height_latent = self.height_encoder(observations[..., 532:763])
-        actions = self.actor(torch.cat([proprio, goal, privileged_latent, height_latent], dim=-1))
+        height_latent = self.height_encoder(observations[..., 530:761])
+        actions = self.actor(torch.cat(
+            [observations[..., 3:45], goal, observations[..., 507:510], privileged, height_latent],
+            dim=-1,
+        ))
         if masks is not None:
             actions = unpad_trajectories(actions, masks)
         return actions

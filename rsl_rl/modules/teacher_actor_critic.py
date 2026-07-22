@@ -10,12 +10,7 @@ from .actor_critic import get_activation
 
 
 class TeacherActorCritic(nn.Module):
-    """Original Teacher architecture adapted to the current observation layout.
-
-    The parameter creation order deliberately matches the legacy Teacher.  Adam
-    serializes its state by parameter order, so this keeps old Teacher resume
-    checkpoints valid in addition to preserving model-state compatibility.
-    """
+    """Privileged Teacher PPO network for the current observation layout."""
 
     is_recurrent = False
 
@@ -40,28 +35,22 @@ class TeacherActorCritic(nn.Module):
             "foot_contacts": slice(510, 514),
             "friction": slice(514, 515),
             "added_mass": slice(515, 516),
-            "p_gain": slice(516, 517),
-            "d_gain": slice(517, 518),
-            "applied_force": slice(518, 521),
-            "applied_torque": slice(521, 524),
-            "feet_air_time": slice(524, 528),
-            "phase_feet_ground_time": slice(528, 532),
-            "height_scan": slice(532, 763),
-            "ladder_info": slice(763, 768),
+            "applied_force": slice(516, 519),
+            "applied_torque": slice(519, 522),
+            "effector_ladder_plane_distance": slice(522, 526),
+            "effector_nearest_bar_distance": slice(526, 530),
+            "height_scan": slice(530, 761),
+            "ladder_info": slice(761, 766),
         }
 
-        # Keep this registration order identical to the legacy Teacher so its
-        # serialized Adam moments remain paired with the correct parameters.
-        self.privileged_encoder = self._build_encoder(27, 32, 24, 16, activation_module)
         self.height_encoder = self._build_encoder(231, 128, 64, 32, activation_module)
         self.critic_height_encoder = self._build_encoder(231, 128, 64, 32, activation_module)
-        self.actor = self._build_mlp(96, actor_hidden_dims, num_actions, activation_module)
-        self.critic = self._build_mlp(107, critic_hidden_dims, 1, activation_module)
+        self.actor = self._build_mlp(105, actor_hidden_dims, num_actions, activation_module)
+        self.critic = self._build_mlp(105, critic_hidden_dims, 1, activation_module)
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
         self.distribution = None
         Normal.set_default_validate_args = False
 
-        print(f"Actor privileged encoder: {self.privileged_encoder}")
         print(f"Actor height encoder: {self.height_encoder}")
         print(f"Critic height encoder: {self.critic_height_encoder}")
         print(f"Actor MLP: {self.actor}")
@@ -111,33 +100,29 @@ class TeacherActorCritic(nn.Module):
         return torch.cat(
             (
                 obs["foot_contacts"],
-                obs["feet_air_time"],
-                obs["phase_feet_ground_time"],
-                obs["ladder_info"],
+                obs["effector_ladder_plane_distance"],
+                obs["effector_nearest_bar_distance"],
                 obs["friction"],
                 obs["added_mass"],
-                obs["p_gain"],
-                obs["d_gain"],
                 obs["applied_force"],
                 obs["applied_torque"],
+                obs["ladder_info"],
             ),
             dim=-1,
         )
 
     def _build_actor_input(self, observations):
         obs = self._split_observations(observations)
-        proprio = torch.cat((obs["base_lin_vel"], obs["curr_proprio_clean"]), dim=-1)
         return torch.cat(
-            (proprio, obs["goal"], self.privileged_encoder(self._build_teacher_privileged(obs)),
+            (obs["curr_proprio_clean"], obs["goal"], obs["base_lin_vel"], self._build_teacher_privileged(obs),
              self.height_encoder(obs["height_scan"])),
             dim=-1,
         )
 
     def _build_critic_input(self, observations):
         obs = self._split_observations(observations)
-        proprio = torch.cat((obs["base_lin_vel"], obs["curr_proprio_clean"]), dim=-1)
         return torch.cat(
-            (proprio, obs["goal"], self._build_teacher_privileged(obs),
+            (obs["curr_proprio_clean"], obs["goal"], obs["base_lin_vel"], self._build_teacher_privileged(obs),
              self.critic_height_encoder(obs["height_scan"])),
             dim=-1,
         )
