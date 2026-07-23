@@ -51,6 +51,7 @@ class PPO:
                  use_clipped_value_loss=True,
                  schedule="adaptive",
                  desired_kl=0.01,
+                 mini_batch_divide=1,
                  estimator_loss_coef=1,
                  height_reconstruction_loss_coef=1000,
                  imitation_loss_coef=0.1,
@@ -78,6 +79,9 @@ class PPO:
         self.clip_param = clip_param
         self.num_learning_epochs = num_learning_epochs
         self.num_mini_batches = num_mini_batches
+        self.mini_batch_divide = int(mini_batch_divide)
+        if self.mini_batch_divide < 1:
+            raise ValueError("mini_batch_divide must be at least 1.")
         self.value_loss_coef = value_loss_coef
         self.entropy_coef = entropy_coef
         self.gamma = gamma
@@ -178,12 +182,32 @@ class PPO:
         mean_imitation_loss = 0
         mean_rl_policy_gradient = 0
         mean_imitation_gradient = 0
+        micro_num_mini_batches = self.num_mini_batches * self.mini_batch_divide
         if self.actor_critic.is_recurrent:
-            generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+            if self.storage.num_envs % micro_num_mini_batches != 0:
+                raise ValueError(
+                    "num_envs must be divisible by num_mini_batches * mini_batch_divide for recurrent PPO."
+                )
+            generator = self.storage.reccurent_mini_batch_generator(
+                micro_num_mini_batches, self.num_learning_epochs
+            )
         else:
-            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, recurrent_dones_batch in generator:
+            total_samples = self.storage.num_envs * self.storage.num_transitions_per_env
+            if total_samples % micro_num_mini_batches != 0:
+                raise ValueError(
+                    "rollout sample count must be divisible by num_mini_batches * mini_batch_divide."
+                )
+            generator = self.storage.mini_batch_generator(
+                micro_num_mini_batches, self.num_learning_epochs
+            )
+
+        accumulated_kl = 0.0
+        for micro_batch_index, (obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+            old_mu_batch, old_sigma_batch, hid_states_batch, recurrent_dones_batch) in enumerate(generator):
+
+                if micro_batch_index % self.mini_batch_divide == 0:
+                    self.optimizer.zero_grad()
+                    accumulated_kl = 0.0
 
                 self.actor_critic.act(
                     obs_batch,
@@ -202,14 +226,7 @@ class PPO:
                         kl = torch.sum(
                             torch.log(sigma_batch / old_sigma_batch + 1.e-5) + (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch)) / (2.0 * torch.square(sigma_batch)) - 0.5, axis=-1)
                         kl_mean = torch.mean(kl)
-
-                        if kl_mean > self.desired_kl * 2.0:
-                            self.learning_rate = max(1e-5, self.learning_rate / 1.5)
-                        elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-                            self.learning_rate = min(1e-2, self.learning_rate * 1.5)
-                        
-                        for param_group in self.optimizer.param_groups:
-                            param_group['lr'] = self.learning_rate
+                        accumulated_kl += kl_mean.item() / self.mini_batch_divide
 
 
                 # Surrogate loss
@@ -263,25 +280,34 @@ class PPO:
                     surrogate_loss,
                     (mu_batch, sigma_batch),
                     self.policy_loss_coef,
-                )
+                ) / self.mini_batch_divide
                 if self.teacher is not None and self.imitation_loss_coef != 0.0:
                     mean_imitation_gradient += self._mean_abs_gradient(
                         imitation_loss,
                         (mu_batch, sigma_batch),
                         self.imitation_loss_coef,
-                    )
+                    ) / self.mini_batch_divide
 
-                # Gradient step
-                self.optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                self.optimizer.step()
+                # Match the gradient of the original logical minibatch mean loss.
+                (loss / self.mini_batch_divide).backward()
 
-                mean_value_loss += value_loss.item()
-                mean_surrogate_loss += surrogate_loss.item()
-                mean_estimator_loss += estimator_loss.item()
-                mean_height_reconstruction_loss += height_reconstruction_loss.item()
-                mean_imitation_loss += imitation_loss.item()
+                is_last_microbatch = (micro_batch_index + 1) % self.mini_batch_divide == 0
+                if is_last_microbatch:
+                    if self.desired_kl != None and self.schedule == 'adaptive':
+                        if accumulated_kl > self.desired_kl * 2.0:
+                            self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                        elif 0.0 < accumulated_kl < self.desired_kl / 2.0:
+                            self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+                        for param_group in self.optimizer.param_groups:
+                            param_group['lr'] = self.learning_rate
+                    nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                    self.optimizer.step()
+
+                mean_value_loss += value_loss.item() / self.mini_batch_divide
+                mean_surrogate_loss += surrogate_loss.item() / self.mini_batch_divide
+                mean_estimator_loss += estimator_loss.item() / self.mini_batch_divide
+                mean_height_reconstruction_loss += height_reconstruction_loss.item() / self.mini_batch_divide
+                mean_imitation_loss += imitation_loss.item() / self.mini_batch_divide
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
