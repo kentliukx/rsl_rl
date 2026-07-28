@@ -204,7 +204,7 @@ class OnPolicyRunner:
                 self.writer.add_scalar('Episode/' + key, value, locs['it'])
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
         mean_std = self.alg.actor_critic.std.mean()
-        slow_reward_coeff = self.env.slow_reward_coeff_buf.item()
+        increasing_reward_coeff = self.env.increasing_reward_coeff_buf.item()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
         self.writer.add_scalar('Loss/value_function', locs['mean_value_loss'], locs['it'])
@@ -217,7 +217,7 @@ class OnPolicyRunner:
         self.writer.add_scalar('Gradient/rl_distribution_per_sample_mean_abs', locs['mean_rl_policy_gradient'], locs['it'])
         self.writer.add_scalar('Gradient/imitation_distribution_per_sample_mean_abs', locs['mean_imitation_gradient'], locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
-        self.writer.add_scalar('Train/slow_reward_coefficient', slow_reward_coeff, locs['it'])
+        self.writer.add_scalar('Train/increasing_reward_coefficient', increasing_reward_coeff, locs['it'])
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
         self.writer.add_scalar('Perf/collection time', locs['collection_time'], locs['it'])
@@ -242,7 +242,7 @@ class OnPolicyRunner:
                           f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
-                          f"""{'Slow reward coefficient:':>{pad}} {slow_reward_coeff:.4f}\n"""
+                          f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
@@ -262,7 +262,7 @@ class OnPolicyRunner:
                           f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
-                          f"""{'Slow reward coefficient:':>{pad}} {slow_reward_coeff:.4f}\n"""
+                          f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
@@ -279,9 +279,9 @@ class OnPolicyRunner:
         print(log_string)
 
     def save(self, path, infos=None):
-        slow_reward_coeff = None
-        if hasattr(self.env, 'slow_reward_coeff_buf'):
-            slow_reward_coeff = float(self.env.slow_reward_coeff_buf.item())
+        increasing_reward_coeff = None
+        if hasattr(self.env, 'increasing_reward_coeff_buf'):
+            increasing_reward_coeff = float(self.env.increasing_reward_coeff_buf.item())
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
@@ -289,7 +289,7 @@ class OnPolicyRunner:
             'imitation_terrain_level_ema': self.alg.imitation_terrain_level_ema,
             'imitation_loss_coef': self.alg.imitation_loss_coef,
             'policy_loss_coef': self.alg.policy_loss_coef,
-            'slow_reward_coeff': slow_reward_coeff,
+            'increasing_reward_coeff': increasing_reward_coeff,
             'infos': infos,
             }, path)
 
@@ -302,7 +302,7 @@ class OnPolicyRunner:
         self.alg.imitation_terrain_level_ema = loaded_dict.get('imitation_terrain_level_ema')
         self.alg.imitation_loss_coef = loaded_dict.get('imitation_loss_coef', self.alg.imitation_loss_coef)
         self.alg.policy_loss_coef = loaded_dict.get('policy_loss_coef', self.alg.policy_loss_coef)
-        self.env.slow_reward_coeff_buf.fill_(float(loaded_dict['slow_reward_coeff']))
+        self.env.increasing_reward_coeff_buf.fill_(float(loaded_dict['increasing_reward_coeff']))
         self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
 
