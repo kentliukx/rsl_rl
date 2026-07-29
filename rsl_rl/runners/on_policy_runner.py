@@ -63,9 +63,9 @@ class OnPolicyRunner:
                                                         num_critic_obs,
                                                         self.env.num_actions,
                                                         **self.policy_cfg).to(self.device)
+        self.teacher_checkpoint = self.cfg.get("teacher_checkpoint")
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
         self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
-        self.teacher_checkpoint = self.cfg.get("teacher_checkpoint")
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
 
@@ -171,7 +171,7 @@ class OnPolicyRunner:
             
             mean_terrain_level = statistics.mean(episode_terrain_level_buffer) if len(episode_terrain_level_buffer) > 0 else None
             self.alg.update_imitation_coefficient(mean_terrain_level)
-            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_imitation_loss, \
+            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_height_reconstruction_loss, mean_ladder_reconstruction_loss, mean_imitation_loss, \
                 mean_rl_policy_gradient, mean_imitation_gradient = self.alg.update()
             stop = time.time()
             learn_time = stop - start
@@ -211,6 +211,7 @@ class OnPolicyRunner:
         self.writer.add_scalar('Loss/surrogate', locs['mean_surrogate_loss'], locs['it'])
         self.writer.add_scalar('Loss/estimator', locs['mean_estimator_loss'], locs['it'])
         self.writer.add_scalar('Loss/height_reconstruction', locs['mean_height_reconstruction_loss'], locs['it'])
+        self.writer.add_scalar('Loss/ladder_reconstruction', locs['mean_ladder_reconstruction_loss'], locs['it'])
         self.writer.add_scalar('Loss/imitation', locs['mean_imitation_loss'], locs['it'])
         self.writer.add_scalar('Loss/imitation_coefficient', self.alg.imitation_loss_coef, locs['it'])
         self.writer.add_scalar('Loss/policy_coefficient', self.alg.policy_loss_coef, locs['it'])
@@ -239,6 +240,7 @@ class OnPolicyRunner:
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
                           f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
                           f"""{'Height reconstruction loss:':>{pad}} {locs['mean_height_reconstruction_loss']:.4f}\n"""
+                          f"""{'Ladder reconstruction loss:':>{pad}} {locs['mean_ladder_reconstruction_loss']:.4f}\n"""
                           f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
@@ -259,6 +261,7 @@ class OnPolicyRunner:
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
                           f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
                           f"""{'Height reconstruction loss:':>{pad}} {locs['mean_height_reconstruction_loss']:.4f}\n"""
+                          f"""{'Ladder reconstruction loss:':>{pad}} {locs['mean_ladder_reconstruction_loss']:.4f}\n"""
                           f"""{'Imitation loss:':>{pad}} {locs['mean_imitation_loss']:.4f}\n"""
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""

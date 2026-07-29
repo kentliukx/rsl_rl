@@ -60,8 +60,11 @@ class StudentActorCritic(ActorCritic):
         self.history_latent_dim = history_latent_dim
         self.depth_latent_dim = depth_latent_dim
         self.mixer_latent_dim = mixer_latent_dim
-        self.estimator_dim = 14
-        actor_input_dim = 42 + 3 + self.estimator_dim + rnn_hidden_size
+        # Keep the actor input layout identical to TeacherActorCritic so its
+        # actor weights can initialize the student policy directly.
+        self.estimator_dim = 15
+        self.ladder_estimator_dim = 2 * 4 + 5
+        actor_input_dim = 42 + 3 + self.estimator_dim + self.ladder_estimator_dim + rnn_hidden_size
 
         super().__init__(
             num_actor_obs=num_actor_obs,
@@ -79,14 +82,15 @@ class StudentActorCritic(ActorCritic):
         self.proprio_history_len = history_length
         self.depth_height = 36
         self.depth_width = 54
-        self.reconstruction_dim = self.height_dim + self.ladder_info_dim
 
         self.history_encoder = self._build_history_encoder(activation_module)
         self.estimator = self._build_estimator(activation_module)
         self.depth_encoder = self._build_depth_encoder(activation_module)
         self.mixer = self._build_mixer(activation_module)
-        self.terrain_decoder = self._build_terrain_decoder(activation_module, rnn_hidden_size)
-        self.reconstructed_terrain_obs = None
+        self.ladder_estimator = self._build_ladder_estimator(activation_module, rnn_hidden_size)
+        self.height_decoder = self._build_height_decoder(activation_module, rnn_hidden_size)
+        self.reconstructed_ladder_obs = None
+        self.reconstructed_height_obs = None
         self.memory_a = Memory(
             self.mixer_latent_dim,
             type=rnn_type,
@@ -99,7 +103,8 @@ class StudentActorCritic(ActorCritic):
         print(f"Actor depth encoder: {self.depth_encoder}")
         print(f"Mixer: {self.mixer}")
         print(f"Actor GRU: {self.memory_a}")
-        print(f"Terrain decoder: {self.terrain_decoder}")
+        print(f"GRU ladder estimator: {self.ladder_estimator}")
+        print(f"Height decoder: {self.height_decoder}")
 
     def _build_history_encoder(self, activation):
         return nn.Sequential(
@@ -142,13 +147,20 @@ class StudentActorCritic(ActorCritic):
             nn.Linear(64, self.mixer_latent_dim),
         )
 
-    def _build_terrain_decoder(self, activation, rnn_hidden_size):
+    def _build_ladder_estimator(self, activation, rnn_hidden_size):
+        return nn.Sequential(
+            nn.Linear(rnn_hidden_size, 64),
+            self._clone_activation(activation),
+            nn.Linear(64, self.ladder_estimator_dim),
+        )
+
+    def _build_height_decoder(self, activation, rnn_hidden_size):
         return nn.Sequential(
             nn.Linear(rnn_hidden_size, 64),
             self._clone_activation(activation),
             nn.Linear(64, 128),
             self._clone_activation(activation),
-            nn.Linear(128, self.reconstruction_dim),
+            nn.Linear(128, self.height_dim),
         )
 
     def _encode_history(self, proprio_history):
@@ -174,7 +186,7 @@ class StudentActorCritic(ActorCritic):
             [
                 estimator_output[..., :3],
                 torch.sigmoid(estimator_output[..., 3:7]),
-                estimator_output[..., 7:14],
+                estimator_output[..., 7:15],
             ],
             dim=-1,
         )
@@ -187,7 +199,8 @@ class StudentActorCritic(ActorCritic):
             z = self.memory_a(padded_mixer_latent, masks, hidden_states)
         else:
             z = self.memory_a(mixer_latent, masks, hidden_states)
-        self.reconstructed_terrain_obs = self.terrain_decoder(z)
+        self.reconstructed_ladder_obs = self.ladder_estimator(z)
+        self.reconstructed_height_obs = self.height_decoder(z)
 
         noisy_proprio = obs["curr_proprio_noisy"]
         goal = obs["goal"]
@@ -195,44 +208,101 @@ class StudentActorCritic(ActorCritic):
             noisy_proprio = unpad_trajectories(noisy_proprio, masks)
             goal = unpad_trajectories(goal, masks)
             estimated_state = unpad_trajectories(estimated_state, masks)
-        return torch.cat([noisy_proprio, goal, estimated_state, z], dim=-1)
+        return torch.cat(
+            [
+                noisy_proprio,
+                goal,
+                estimated_state[..., :7],
+                self.reconstructed_ladder_obs[..., :8],
+                estimated_state[..., 7:9],
+                estimated_state[..., 9:15],
+                self.reconstructed_ladder_obs[..., 8:13],
+                z,
+            ],
+            dim=-1,
+        )
 
-    def estimator_loss(self, observations, masks=None):
+    @staticmethod
+    def _squared_error_loss(prediction, target, sum_features):
+        squared_error = torch.square(prediction - target)
+        if sum_features:
+            return torch.mean(torch.sum(squared_error, dim=-1))
+        return torch.mean(squared_error)
+
+    def _estimator_loss(self, observations, masks=None, sum_features=True):
         obs = self._split_observations(observations)
         prediction = self.estimator(self._encode_history(obs["proprio_history"]))
         target = torch.cat(
             [
                 obs["base_lin_vel"],
                 obs["foot_contacts"],
+                obs["friction"],
+                obs["added_mass"],
                 obs["applied_force"],
                 obs["applied_torque"],
-                obs["friction"],
             ],
             dim=-1,
         )
         if masks is not None:
             prediction = unpad_trajectories(prediction, masks)
             target = unpad_trajectories(target, masks)
-        velocity_loss = torch.mean((prediction[..., :3] - target[..., :3]) ** 2)
-        contact_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            prediction[..., 3:7],
-            target[..., 3:7],
+        per_output_loss = torch.cat(
+            (
+                torch.square(prediction[..., :3] - target[..., :3]),
+                torch.nn.functional.binary_cross_entropy_with_logits(
+                    prediction[..., 3:7],
+                    target[..., 3:7],
+                    reduction="none",
+                ),
+                torch.square(prediction[..., 7:] - target[..., 7:]),
+            ),
+            dim=-1,
         )
-        force_loss = torch.mean((prediction[..., 7:10] - target[..., 7:10]) ** 2)
-        torque_loss = torch.mean((prediction[..., 10:13] - target[..., 10:13]) ** 2)
-        friction_loss = torch.mean((prediction[..., 13:] - target[..., 13:]) ** 2)
-        return velocity_loss + contact_loss + force_loss + torque_loss + friction_loss
+        if sum_features:
+            # Backpropagate the sum over all 15 supervised estimator outputs.
+            return torch.mean(torch.sum(per_output_loss, dim=-1))
+        # Keep the diagnostic independent of the number of supervised outputs.
+        return torch.mean(per_output_loss)
 
-    def height_reconstruction_loss(self, observations, masks=None):
+    def estimator_loss(self, observations, masks=None):
+        return self._estimator_loss(observations, masks, sum_features=True)
+
+    def estimator_loss_mean(self, observations, masks=None):
+        return self._estimator_loss(observations, masks, sum_features=False)
+
+    def _height_reconstruction_loss(self, observations, masks=None, sum_features=True):
         obs = self._split_observations(observations)
         height_target = obs["height_scan"]
-        ladder_target = obs["ladder_info"]
         if masks is not None:
             height_target = unpad_trajectories(height_target, masks)
-            ladder_target = unpad_trajectories(ladder_target, masks)
+        return self._squared_error_loss(self.reconstructed_height_obs, height_target, sum_features)
 
-        terrain_target = torch.cat((height_target, ladder_target), dim=-1)
-        return torch.mean((self.reconstructed_terrain_obs - terrain_target) ** 2)
+    def height_reconstruction_loss(self, observations, masks=None):
+        return self._height_reconstruction_loss(observations, masks, sum_features=True)
+
+    def height_reconstruction_loss_mean(self, observations, masks=None):
+        return self._height_reconstruction_loss(observations, masks, sum_features=False)
+
+    def _ladder_reconstruction_loss(self, observations, masks=None, sum_features=True):
+        """Supervise the explicit distance and ladder-observation GRU head."""
+        obs = self._split_observations(observations)
+        ladder_target = torch.cat(
+            (
+                obs["effector_ladder_plane_distance"],
+                obs["effector_nearest_bar_distance"],
+                obs["ladder_info"],
+            ),
+            dim=-1,
+        )
+        if masks is not None:
+            ladder_target = unpad_trajectories(ladder_target, masks)
+        return self._squared_error_loss(self.reconstructed_ladder_obs, ladder_target, sum_features)
+
+    def ladder_reconstruction_loss(self, observations, masks=None):
+        return self._ladder_reconstruction_loss(observations, masks, sum_features=True)
+
+    def ladder_reconstruction_loss_mean(self, observations, masks=None):
+        return self._ladder_reconstruction_loss(observations, masks, sum_features=False)
 
     def update_distribution(self, observations, masks=None, hidden_states=None, dones=None):
         mean = self.actor(self._build_actor_input(observations, masks, hidden_states, dones))

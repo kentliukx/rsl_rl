@@ -53,8 +53,9 @@ class PPO:
                  desired_kl=0.01,
                  mini_batch_divide=1,
                  estimator_loss_coef=1,
-                 height_reconstruction_loss_coef=1000,
-                 imitation_loss_coef=0.1,
+                 height_reconstruction_loss_coef=1,
+                 ladder_reconstruction_loss_coef=1,
+                 imitation_loss_coef=0.0,
                  imitation_loss_min_coef=0.0,
                  imitation_terrain_level_lower=1.0,
                  imitation_terrain_level_upper=3.0,
@@ -90,6 +91,7 @@ class PPO:
         self.use_clipped_value_loss = use_clipped_value_loss
         self.estimator_loss_coef = estimator_loss_coef
         self.height_reconstruction_loss_coef = height_reconstruction_loss_coef
+        self.ladder_reconstruction_loss_coef = ladder_reconstruction_loss_coef
         self.imitation_loss_max_coef = imitation_loss_coef
         self.imitation_loss_min_coef = imitation_loss_min_coef
         self.imitation_loss_coef = imitation_loss_coef
@@ -179,6 +181,7 @@ class PPO:
         mean_surrogate_loss = 0
         mean_estimator_loss = 0
         mean_height_reconstruction_loss = 0
+        mean_ladder_reconstruction_loss = 0
         mean_imitation_loss = 0
         mean_rl_policy_gradient = 0
         mean_imitation_gradient = 0
@@ -248,12 +251,36 @@ class PPO:
 
                 if hasattr(self.actor_critic, "estimator_loss"):
                     estimator_loss = self.actor_critic.estimator_loss(obs_batch)
+                    with torch.no_grad():
+                        estimator_loss_mean = (
+                            self.actor_critic.estimator_loss_mean(obs_batch)
+                            if hasattr(self.actor_critic, "estimator_loss_mean") else estimator_loss.detach()
+                        )
                 else:
                     estimator_loss = torch.zeros((), device=self.device)
+                    estimator_loss_mean = estimator_loss
                 if hasattr(self.actor_critic, "height_reconstruction_loss"):
                     height_reconstruction_loss = self.actor_critic.height_reconstruction_loss(obs_batch)
+                    with torch.no_grad():
+                        height_reconstruction_loss_mean = (
+                            self.actor_critic.height_reconstruction_loss_mean(obs_batch)
+                            if hasattr(self.actor_critic, "height_reconstruction_loss_mean")
+                            else height_reconstruction_loss.detach()
+                        )
                 else:
                     height_reconstruction_loss = torch.zeros((), device=self.device)
+                    height_reconstruction_loss_mean = height_reconstruction_loss
+                if hasattr(self.actor_critic, "ladder_reconstruction_loss"):
+                    ladder_reconstruction_loss = self.actor_critic.ladder_reconstruction_loss(obs_batch)
+                    with torch.no_grad():
+                        ladder_reconstruction_loss_mean = (
+                            self.actor_critic.ladder_reconstruction_loss_mean(obs_batch)
+                            if hasattr(self.actor_critic, "ladder_reconstruction_loss_mean")
+                            else ladder_reconstruction_loss.detach()
+                        )
+                else:
+                    ladder_reconstruction_loss = torch.zeros((), device=self.device)
+                    ladder_reconstruction_loss_mean = ladder_reconstruction_loss
                 if self.teacher is not None:
                     with torch.inference_mode():
                         teacher_mu, teacher_sigma = self.teacher.distribution_parameters(obs_batch)
@@ -272,6 +299,7 @@ class PPO:
                     + self.value_loss_coef * value_loss
                     + self.estimator_loss_coef * estimator_loss
                     + self.height_reconstruction_loss_coef * height_reconstruction_loss
+                    + self.ladder_reconstruction_loss_coef * ladder_reconstruction_loss
                     + self.imitation_loss_coef * imitation_loss
                     - self.entropy_coef * entropy_batch.mean()
                 )
@@ -305,8 +333,9 @@ class PPO:
 
                 mean_value_loss += value_loss.item() / self.mini_batch_divide
                 mean_surrogate_loss += surrogate_loss.item() / self.mini_batch_divide
-                mean_estimator_loss += estimator_loss.item() / self.mini_batch_divide
-                mean_height_reconstruction_loss += height_reconstruction_loss.item() / self.mini_batch_divide
+                mean_estimator_loss += estimator_loss_mean.item() / self.mini_batch_divide
+                mean_height_reconstruction_loss += height_reconstruction_loss_mean.item() / self.mini_batch_divide
+                mean_ladder_reconstruction_loss += ladder_reconstruction_loss_mean.item() / self.mini_batch_divide
                 mean_imitation_loss += imitation_loss.item() / self.mini_batch_divide
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
@@ -314,6 +343,7 @@ class PPO:
         mean_surrogate_loss /= num_updates
         mean_estimator_loss /= num_updates
         mean_height_reconstruction_loss /= num_updates
+        mean_ladder_reconstruction_loss /= num_updates
         mean_imitation_loss /= num_updates
         mean_rl_policy_gradient /= num_updates
         mean_imitation_gradient /= num_updates
@@ -324,6 +354,7 @@ class PPO:
             mean_surrogate_loss,
             mean_estimator_loss,
             mean_height_reconstruction_loss,
+            mean_ladder_reconstruction_loss,
             mean_imitation_loss,
             mean_rl_policy_gradient,
             mean_imitation_gradient,
