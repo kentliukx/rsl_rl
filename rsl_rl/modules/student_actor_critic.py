@@ -304,6 +304,35 @@ class StudentActorCritic(ActorCritic):
     def ladder_reconstruction_loss_mean(self, observations, masks=None):
         return self._ladder_reconstruction_loss(observations, masks, sum_features=False)
 
+    def initialize_from_teacher(self, checkpoint):
+        """Copy the compatible privileged Teacher policy network."""
+        state_dict = torch.load(checkpoint, map_location="cpu")["model_state_dict"]
+        prefixes = ("actor.",)
+        copied_state_dict = {
+            key: value for key, value in state_dict.items()
+            if key.startswith(prefixes)
+        }
+        expected_keys = {
+            key for key in self.state_dict()
+            if key.startswith(prefixes)
+        }
+        if set(copied_state_dict) != expected_keys:
+            missing = sorted(expected_keys - set(copied_state_dict))
+            unexpected = sorted(set(copied_state_dict) - expected_keys)
+            raise RuntimeError(
+                "Teacher checkpoint is incompatible with the Student actor initialization. "
+                f"Missing={missing}, unexpected={unexpected}"
+            )
+        for key in expected_keys:
+            if copied_state_dict[key].shape != self.state_dict()[key].shape:
+                raise RuntimeError(
+                    "Teacher checkpoint tensor shape does not match Student initialization for "
+                    f"{key}: teacher={tuple(copied_state_dict[key].shape)}, "
+                    f"student={tuple(self.state_dict()[key].shape)}"
+                )
+        self.load_state_dict(copied_state_dict, strict=False)
+        print(f"Initialized Student actor from Teacher checkpoint: {checkpoint}")
+
     def update_distribution(self, observations, masks=None, hidden_states=None, dones=None):
         mean = self.actor(self._build_actor_input(observations, masks, hidden_states, dones))
         self.distribution = torch.distributions.Normal(mean, mean * 0.0 + self.std)

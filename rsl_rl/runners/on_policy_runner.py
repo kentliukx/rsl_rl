@@ -64,6 +64,12 @@ class OnPolicyRunner:
                                                         self.env.num_actions,
                                                         **self.policy_cfg).to(self.device)
         self.teacher_checkpoint = self.cfg.get("teacher_checkpoint")
+        if (isinstance(actor_critic, StudentActorCritic)
+                and self.teacher_checkpoint
+                and self.cfg.get("initialize_student_from_teacher", True)
+                and not self.cfg.get("resume", False)):
+            teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
+            actor_critic.initialize_from_teacher(teacher_checkpoint)
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
         self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
