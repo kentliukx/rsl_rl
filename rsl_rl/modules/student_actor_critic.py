@@ -50,10 +50,11 @@ class StudentActorCritic(ActorCritic):
                         history_length=10,
                         history_latent_dim=32,
                         depth_latent_dim=32,
-                        mixer_latent_dim=32,
+                        mixer_latent_dim=45,
                         rnn_type='gru',
-                        rnn_hidden_size=32,
+                        rnn_hidden_size=45,
                         rnn_num_layers=1,
+                        rnn_latent_dim=32,
                         init_noise_std=1.0,
                         **kwargs):
         self.history_length = history_length
@@ -63,8 +64,10 @@ class StudentActorCritic(ActorCritic):
         # Keep the actor input layout identical to TeacherActorCritic so its
         # actor weights can initialize the student policy directly.
         self.estimator_dim = 15
-        self.ladder_estimator_dim = 2 * 4 + 5
-        actor_input_dim = 42 + 3 + self.estimator_dim + self.ladder_estimator_dim + rnn_hidden_size
+        self.ladder_obs_dim = 2 * 4 + 5
+        self.recurrent_output_dim = rnn_hidden_size
+        self.recurrent_latent_dim = rnn_latent_dim
+        actor_input_dim = 42 + 3 + self.estimator_dim + self.ladder_obs_dim + self.recurrent_latent_dim
 
         super().__init__(
             num_actor_obs=num_actor_obs,
@@ -87,15 +90,14 @@ class StudentActorCritic(ActorCritic):
         self.estimator = self._build_estimator(activation_module)
         self.depth_encoder = self._build_depth_encoder(activation_module)
         self.mixer = self._build_mixer(activation_module)
-        self.ladder_estimator = self._build_ladder_estimator(activation_module, rnn_hidden_size)
-        self.height_decoder = self._build_height_decoder(activation_module, rnn_hidden_size)
+        self.height_decoder = self._build_height_decoder(activation_module, self.recurrent_latent_dim)
         self.reconstructed_ladder_obs = None
         self.reconstructed_height_obs = None
         self.memory_a = Memory(
             self.mixer_latent_dim,
             type=rnn_type,
             num_layers=rnn_num_layers,
-            hidden_size=rnn_hidden_size,
+            hidden_size=self.recurrent_output_dim,
         )
 
         print(f"History encoder: {self.history_encoder}")
@@ -103,7 +105,6 @@ class StudentActorCritic(ActorCritic):
         print(f"Actor depth encoder: {self.depth_encoder}")
         print(f"Mixer: {self.mixer}")
         print(f"Actor GRU: {self.memory_a}")
-        print(f"GRU ladder estimator: {self.ladder_estimator}")
         print(f"Height decoder: {self.height_decoder}")
 
     def _build_history_encoder(self, activation):
@@ -145,13 +146,6 @@ class StudentActorCritic(ActorCritic):
             nn.Linear(128, 64),
             self._clone_activation(activation),
             nn.Linear(64, self.mixer_latent_dim),
-        )
-
-    def _build_ladder_estimator(self, activation, rnn_hidden_size):
-        return nn.Sequential(
-            nn.Linear(rnn_hidden_size, 64),
-            self._clone_activation(activation),
-            nn.Linear(64, self.ladder_estimator_dim),
         )
 
     def _build_height_decoder(self, activation, rnn_hidden_size):
@@ -196,10 +190,13 @@ class StudentActorCritic(ActorCritic):
             # Padding after feature extraction avoids duplicating the full
             # observation tensor during recurrent PPO updates.
             padded_mixer_latent, masks = split_and_pad_trajectories(mixer_latent, dones)
-            z = self.memory_a(padded_mixer_latent, masks, hidden_states)
+            recurrent_output = self.memory_a(padded_mixer_latent, masks, hidden_states)
         else:
-            z = self.memory_a(mixer_latent, masks, hidden_states)
-        self.reconstructed_ladder_obs = self.ladder_estimator(z)
+            recurrent_output = self.memory_a(mixer_latent, masks, hidden_states)
+        z = recurrent_output[..., :self.recurrent_latent_dim]
+        self.reconstructed_ladder_obs = recurrent_output[
+            ..., self.recurrent_latent_dim:self.recurrent_output_dim
+        ]
         self.reconstructed_height_obs = self.height_decoder(z)
 
         noisy_proprio = obs["curr_proprio_noisy"]
