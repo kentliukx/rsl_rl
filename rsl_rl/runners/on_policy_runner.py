@@ -102,6 +102,12 @@ class OnPolicyRunner:
             return float(value)
         return None
 
+    def _get_env_scalar(self, method_name):
+        method = getattr(self.env, method_name, None)
+        if method is None:
+            return None
+        return self._to_scalar(method())
+
     def load_teacher_policy(self):
         if self.teacher_checkpoint and self.alg.teacher is None:
             teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
@@ -211,6 +217,10 @@ class OnPolicyRunner:
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
         mean_std = self.alg.actor_critic.std.mean()
         increasing_reward_coeff = self.env.increasing_reward_coeff_buf.item()
+        noise_level = self._get_env_scalar("get_current_noise_level")
+        push_level = self._get_env_scalar("get_current_push_level")
+        foot_push_level = self._get_env_scalar("get_current_foot_push_level")
+        global_terrain_level = self._get_env_scalar("get_current_mean_terrain_level")
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
         self.writer.add_scalar('Loss/value_function', locs['mean_value_loss'], locs['it'])
@@ -225,6 +235,14 @@ class OnPolicyRunner:
         self.writer.add_scalar('Gradient/imitation_distribution_per_sample_mean_abs', locs['mean_imitation_gradient'], locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
         self.writer.add_scalar('Train/increasing_reward_coefficient', increasing_reward_coeff, locs['it'])
+        if noise_level is not None:
+            self.writer.add_scalar('Train/noise_level', noise_level, locs['it'])
+        if push_level is not None:
+            self.writer.add_scalar('Train/push_level', push_level, locs['it'])
+        if foot_push_level is not None:
+            self.writer.add_scalar('Train/foot_push_level', foot_push_level, locs['it'])
+        if global_terrain_level is not None:
+            self.writer.add_scalar('Train/global_terrain_level', global_terrain_level, locs['it'])
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
         self.writer.add_scalar('Perf/collection time', locs['collection_time'], locs['it'])
@@ -236,6 +254,15 @@ class OnPolicyRunner:
             self.writer.add_scalar('Train/mean_episode_length/time', statistics.mean(locs['lenbuffer']), self.tot_time)
 
         str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        disturbance_string = ""
+        if noise_level is not None:
+            disturbance_string += f"""{'Noise level:':>{pad}} {noise_level:.4f}\n"""
+        if push_level is not None:
+            disturbance_string += f"""{'Push level:':>{pad}} {push_level:.4f}\n"""
+        if foot_push_level is not None:
+            disturbance_string += f"""{'Foot push level:':>{pad}} {foot_push_level:.4f}\n"""
+        if global_terrain_level is not None:
+            disturbance_string += f"""{'Global terrain level:':>{pad}} {global_terrain_level:.4f}\n"""
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
@@ -251,6 +278,7 @@ class OnPolicyRunner:
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
+                          f"""{disturbance_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
@@ -272,6 +300,7 @@ class OnPolicyRunner:
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
+                          f"""{disturbance_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
