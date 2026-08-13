@@ -108,6 +108,48 @@ class OnPolicyRunner:
             return None
         return self._to_scalar(method())
 
+    @staticmethod
+    def _terrain_bucket_labels(num_buckets):
+        return ["rough"] + [f"L{level}" for level in range(1, num_buckets)]
+
+    def _format_terrain_diagnostics(self, active_counts, termination_reason_counts, iteration):
+        if active_counts is None:
+            return ""
+
+        active_counts = active_counts.detach().cpu().tolist()
+        labels = self._terrain_bucket_labels(len(active_counts))
+        active_summary = " ".join(
+            f"{label}={count}" for label, count in zip(labels, active_counts)
+        )
+        diagnostics = ""
+
+        if termination_reason_counts is None:
+            diagnostics += f"{'Resets this iteration:':>35} none\n"
+        else:
+            reason_counts = termination_reason_counts.detach().cpu().tolist()
+            reset_counts = [sum(reasons) for reasons in reason_counts]
+            reset_summary = " ".join(
+                f"{label}={count}" for label, count in zip(labels, reset_counts)
+            )
+            diagnostics += f"{'Resets this iteration:':>35} {reset_summary}\n"
+            diagnostics += f"{'Reset reasons (contact>attitude>timeout):':>35}\n"
+            for label, resets, reasons in zip(labels, reset_counts, reason_counts):
+                contact, attitude, timeout = reasons
+                diagnostics += (
+                    f"  {label:>5}: resets={resets:4d} contact={contact:4d} "
+                    f"attitude={attitude:4d} timeout={timeout:4d}\n"
+                )
+                self.writer.add_scalar(f"Terrain/resets/{label}", resets, iteration)
+                self.writer.add_scalar(f"Terrain/reset_contact/{label}", contact, iteration)
+                self.writer.add_scalar(f"Terrain/reset_attitude/{label}", attitude, iteration)
+                self.writer.add_scalar(f"Terrain/reset_timeout/{label}", timeout, iteration)
+            self.writer.add_scalar("Terrain/resets/total", sum(reset_counts), iteration)
+
+        diagnostics += f"{'Active envs at iteration end:':>35} {active_summary}\n"
+        for label, count in zip(labels, active_counts):
+            self.writer.add_scalar(f"Terrain/active/{label}", count, iteration)
+        return diagnostics
+
     def load_teacher_policy(self):
         if self.teacher_checkpoint and self.alg.teacher is None:
             teacher_checkpoint = os.path.abspath(os.path.expanduser(self.teacher_checkpoint))
@@ -144,6 +186,7 @@ class OnPolicyRunner:
         tot_iter = self.current_learning_iteration + num_learning_iterations
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
+            terrain_termination_reason_counts = None
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
@@ -152,7 +195,8 @@ class OnPolicyRunner:
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
                     self.alg.process_env_step(rewards, dones, infos)
-                    if 'episode' in infos:
+                    new_ids = (dones > 0).nonzero(as_tuple=False)
+                    if new_ids.numel() > 0 and 'episode' in infos:
                         episode_info = infos['episode']
                         terrain_level = None
                         for key in ("terrain_level", "terrain_level_mean", "terrain_levels"):
@@ -164,11 +208,16 @@ class OnPolicyRunner:
                     
                     if self.log_dir is not None:
                         # Book keeping
-                        if 'episode' in infos:
+                        if new_ids.numel() > 0 and 'episode' in infos:
                             ep_infos.append(infos['episode'])
+                        if new_ids.numel() > 0:
+                            termination_reason_counts = infos.get("terrain_termination_reason_counts")
+                            if termination_reason_counts is not None:
+                                if terrain_termination_reason_counts is None:
+                                    terrain_termination_reason_counts = torch.zeros_like(termination_reason_counts)
+                                terrain_termination_reason_counts += termination_reason_counts
                         cur_reward_sum += rewards
                         cur_episode_length += 1
-                        new_ids = (dones > 0).nonzero(as_tuple=False)
                         rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
                         lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
                         cur_reward_sum[new_ids] = 0
@@ -176,6 +225,10 @@ class OnPolicyRunner:
 
                 stop = time.time()
                 collection_time = stop - start
+                terrain_distribution = None
+                get_terrain_distribution = getattr(self.env, "get_current_terrain_distribution", None)
+                if get_terrain_distribution is not None:
+                    terrain_distribution = get_terrain_distribution()
 
                 # Learning step
                 start = stop
@@ -221,6 +274,11 @@ class OnPolicyRunner:
         push_level = self._get_env_scalar("get_current_push_level")
         foot_push_level = self._get_env_scalar("get_current_foot_push_level")
         global_terrain_level = self._get_env_scalar("get_current_mean_terrain_level")
+        terrain_diagnostics_string = self._format_terrain_diagnostics(
+            locs.get("terrain_distribution"),
+            locs.get("terrain_termination_reason_counts"),
+            locs["it"],
+        )
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
         self.writer.add_scalar('Loss/value_function', locs['mean_value_loss'], locs['it'])
@@ -279,6 +337,7 @@ class OnPolicyRunner:
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
                           f"""{disturbance_string}"""
+                          f"""{terrain_diagnostics_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
@@ -301,6 +360,7 @@ class OnPolicyRunner:
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
                           f"""{disturbance_string}"""
+                          f"""{terrain_diagnostics_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
                           f"""{'Mean imitation gradient per sample:':>{pad}} {locs['mean_imitation_gradient']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
