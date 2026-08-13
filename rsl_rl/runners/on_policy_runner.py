@@ -112,7 +112,13 @@ class OnPolicyRunner:
     def _terrain_bucket_labels(num_buckets):
         return ["rough"] + [f"L{level}" for level in range(1, num_buckets)]
 
-    def _format_terrain_diagnostics(self, active_counts, termination_reason_counts, iteration):
+    def _format_terrain_diagnostics(
+        self,
+        active_counts,
+        termination_reason_counts,
+        termination_progress_sums,
+        iteration,
+    ):
         if active_counts is None:
             return ""
 
@@ -128,22 +134,35 @@ class OnPolicyRunner:
         else:
             reason_counts = termination_reason_counts.detach().cpu().tolist()
             reset_counts = [sum(reasons) for reasons in reason_counts]
+            progress_sums = None
+            if termination_progress_sums is not None:
+                progress_sums = termination_progress_sums.detach().cpu().tolist()
             reset_summary = " ".join(
                 f"{label}={count}" for label, count in zip(labels, reset_counts)
             )
             diagnostics += f"{'Resets this iteration:':>35} {reset_summary}\n"
             diagnostics += f"{'Reset reasons (contact>attitude>timeout):':>35}\n"
-            for label, resets, reasons in zip(labels, reset_counts, reason_counts):
+            for bucket_idx, (label, resets, reasons) in enumerate(zip(labels, reset_counts, reason_counts)):
                 contact, attitude, timeout = reasons
+                mean_progress = None if progress_sums is None or resets == 0 else progress_sums[bucket_idx] / resets
+                progress_text = "n/a" if mean_progress is None else f"{mean_progress:.3f}"
                 diagnostics += (
-                    f"  {label:>5}: resets={resets:4d} contact={contact:4d} "
+                    f"  {label:>5}: resets={resets:4d} avg_progress={progress_text:>5} contact={contact:4d} "
                     f"attitude={attitude:4d} timeout={timeout:4d}\n"
                 )
                 self.writer.add_scalar(f"Terrain/resets/{label}", resets, iteration)
                 self.writer.add_scalar(f"Terrain/reset_contact/{label}", contact, iteration)
                 self.writer.add_scalar(f"Terrain/reset_attitude/{label}", attitude, iteration)
                 self.writer.add_scalar(f"Terrain/reset_timeout/{label}", timeout, iteration)
+                if mean_progress is not None:
+                    self.writer.add_scalar(f"Terrain/reset_ladder_progress/{label}", mean_progress, iteration)
             self.writer.add_scalar("Terrain/resets/total", sum(reset_counts), iteration)
+            if progress_sums is not None and sum(reset_counts) > 0:
+                self.writer.add_scalar(
+                    "Terrain/reset_ladder_progress/all",
+                    sum(progress_sums) / sum(reset_counts),
+                    iteration,
+                )
 
         diagnostics += f"{'Active envs at iteration end:':>35} {active_summary}\n"
         for label, count in zip(labels, active_counts):
@@ -187,6 +206,7 @@ class OnPolicyRunner:
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
             terrain_termination_reason_counts = None
+            terrain_termination_progress_sums = None
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
@@ -216,6 +236,11 @@ class OnPolicyRunner:
                                 if terrain_termination_reason_counts is None:
                                     terrain_termination_reason_counts = torch.zeros_like(termination_reason_counts)
                                 terrain_termination_reason_counts += termination_reason_counts
+                            termination_progress_sums = infos.get("terrain_termination_progress_sums")
+                            if termination_progress_sums is not None:
+                                if terrain_termination_progress_sums is None:
+                                    terrain_termination_progress_sums = torch.zeros_like(termination_progress_sums)
+                                terrain_termination_progress_sums += termination_progress_sums
                         cur_reward_sum += rewards
                         cur_episode_length += 1
                         rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
@@ -277,6 +302,7 @@ class OnPolicyRunner:
         terrain_diagnostics_string = self._format_terrain_diagnostics(
             locs.get("terrain_distribution"),
             locs.get("terrain_termination_reason_counts"),
+            locs.get("terrain_termination_progress_sums"),
             locs["it"],
         )
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
