@@ -63,11 +63,13 @@ class StudentActorCritic(ActorCritic):
         self.mixer_latent_dim = mixer_latent_dim
         # Keep the actor input layout identical to TeacherActorCritic so its
         # actor weights can initialize the student policy directly.
-        self.estimator_dim = 15
+        # Contact precision is supplied by the robot's contact sensor, so the
+        # estimator only reconstructs the remaining 11 privileged quantities.
+        self.estimator_dim = 11
         self.ladder_obs_dim = 2 * 4 + 5
         self.recurrent_output_dim = rnn_hidden_size
         self.recurrent_latent_dim = rnn_latent_dim
-        actor_input_dim = 42 + 3 + self.estimator_dim + self.ladder_obs_dim + self.recurrent_latent_dim
+        actor_input_dim = 42 + 3 + 4 + self.estimator_dim + self.ladder_obs_dim + self.recurrent_latent_dim
 
         super().__init__(
             num_actor_obs=num_actor_obs,
@@ -176,14 +178,7 @@ class StudentActorCritic(ActorCritic):
         obs = self._split_observations(observations)
         history_latent = self._encode_history(obs["proprio_history"])
         estimator_output = self.estimator(history_latent)
-        estimated_state = torch.cat(
-            [
-                estimator_output[..., :3],
-                torch.sigmoid(estimator_output[..., 3:7]),
-                estimator_output[..., 7:15],
-            ],
-            dim=-1,
-        )
+        contact_precision = obs["contact_precision"]
         depth_latent = self._encode_depth(obs["depth_image"])
         mixer_latent = self.mixer(torch.cat([history_latent, depth_latent], dim=-1))
         if dones is not None:
@@ -204,15 +199,17 @@ class StudentActorCritic(ActorCritic):
         if observations_are_padded:
             noisy_proprio = unpad_trajectories(noisy_proprio, masks)
             goal = unpad_trajectories(goal, masks)
-            estimated_state = unpad_trajectories(estimated_state, masks)
+            estimator_output = unpad_trajectories(estimator_output, masks)
+            contact_precision = unpad_trajectories(contact_precision, masks)
         return torch.cat(
             [
                 noisy_proprio,
                 goal,
-                estimated_state[..., :7],
+                estimator_output[..., :3],
+                contact_precision,
                 self.reconstructed_ladder_obs[..., :8],
-                estimated_state[..., 7:9],
-                estimated_state[..., 9:15],
+                estimator_output[..., 3:5],
+                estimator_output[..., 5:11],
                 self.reconstructed_ladder_obs[..., 8:13],
                 z,
             ],
@@ -232,7 +229,6 @@ class StudentActorCritic(ActorCritic):
         target = torch.cat(
             [
                 obs["base_lin_vel"],
-                obs["foot_contacts"],
                 obs["friction"],
                 obs["added_mass"],
                 obs["applied_force"],
@@ -243,20 +239,9 @@ class StudentActorCritic(ActorCritic):
         if masks is not None:
             prediction = unpad_trajectories(prediction, masks)
             target = unpad_trajectories(target, masks)
-        per_output_loss = torch.cat(
-            (
-                torch.square(prediction[..., :3] - target[..., :3]),
-                torch.nn.functional.binary_cross_entropy_with_logits(
-                    prediction[..., 3:7],
-                    target[..., 3:7],
-                    reduction="none",
-                ),
-                torch.square(prediction[..., 7:] - target[..., 7:]),
-            ),
-            dim=-1,
-        )
+        per_output_loss = torch.square(prediction - target)
         if sum_features:
-            # Backpropagate the sum over all 15 supervised estimator outputs.
+            # Backpropagate the sum over all 11 supervised estimator outputs.
             return torch.mean(torch.sum(per_output_loss, dim=-1))
         # Keep the diagnostic independent of the number of supervised outputs.
         return torch.mean(per_output_loss)

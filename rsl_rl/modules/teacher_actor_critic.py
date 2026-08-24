@@ -32,7 +32,7 @@ class TeacherActorCritic(nn.Module):
             "goal": slice(0, 3),
             "curr_proprio_clean": slice(3, 45),
             "base_lin_vel": slice(507, 510),
-            "foot_contacts": slice(510, 514),
+            "contact_precision": slice(510, 514),
             "friction": slice(514, 515),
             "added_mass": slice(515, 516),
             "applied_force": slice(516, 519),
@@ -99,7 +99,7 @@ class TeacherActorCritic(nn.Module):
     def _build_teacher_privileged(obs):
         return torch.cat(
             (
-                obs["foot_contacts"],
+                obs["contact_precision"],
                 obs["effector_ladder_plane_distance"],
                 obs["effector_nearest_bar_distance"],
                 obs["friction"],

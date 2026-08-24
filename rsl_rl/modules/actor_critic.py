@@ -59,7 +59,7 @@ class ActorCritic(nn.Module):
             "curr_proprio_noisy": slice(45, 87),
             "proprio_history": slice(87, 507),
             "base_lin_vel": slice(507, 510),
-            "foot_contacts": slice(510, 514),
+            "contact_precision": slice(510, 514),
             "friction": slice(514, 515),
             "added_mass": slice(515, 516),
             "applied_force": slice(516, 519),
@@ -175,7 +175,7 @@ class ActorCritic(nn.Module):
         return torch.cat(
             [
                 obs["base_lin_vel"],
-                obs["foot_contacts"],
+                obs["contact_precision"],
                 obs["effector_ladder_plane_distance"],
                 obs["effector_nearest_bar_distance"],
                 obs["friction"],
