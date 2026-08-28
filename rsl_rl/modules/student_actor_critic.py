@@ -400,7 +400,7 @@ class TeacherPolicy(nn.Module):
         goal = observations[..., 0:3]
         privileged = torch.cat(
             [
-                observations[..., 510:514],
+                observations[..., 2710:2714],  # clean contact precision for imitation
                 observations[..., 522:526],  # effector-center to ladder plane
                 observations[..., 526:530],  # effector-center to nearest rung
                 observations[..., 514:516],  # friction and added mass
