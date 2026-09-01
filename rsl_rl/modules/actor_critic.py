@@ -69,6 +69,9 @@ class ActorCritic(nn.Module):
             "height_scan": slice(530, 761),
             "ladder_info": slice(761, 766),
             "depth_image": slice(766, 2710),
+            # Clean precision is appended for privileged supervision and
+            # imitation. Student policy inputs never consume it directly.
+            "clean_contact_precision": slice(2710, 2714),
         }
 
         self.proprio_dim = 42
