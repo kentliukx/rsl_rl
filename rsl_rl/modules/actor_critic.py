@@ -175,7 +175,9 @@ class ActorCritic(nn.Module):
         return torch.cat(
             [
                 obs["base_lin_vel"],
-                obs["contact_precision"],
+                # The critic remains privileged: never train its value target
+                # against the Student's difficulty-noised contact sensor.
+                obs["clean_contact_precision"],
                 obs["effector_ladder_plane_distance"],
                 obs["effector_nearest_bar_distance"],
                 obs["friction"],
