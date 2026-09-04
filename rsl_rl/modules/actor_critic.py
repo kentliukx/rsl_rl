@@ -56,22 +56,22 @@ class ActorCritic(nn.Module):
         self.obs_slices = {
             "goal": slice(0, 3),
             "curr_proprio_clean": slice(3, 45),
-            "curr_proprio_noisy": slice(45, 87),
-            "proprio_history": slice(87, 507),
-            "base_lin_vel": slice(507, 510),
-            "contact_precision": slice(510, 514),
-            "friction": slice(514, 515),
-            "added_mass": slice(515, 516),
-            "applied_force": slice(516, 519),
-            "applied_torque": slice(519, 522),
-            "effector_ladder_plane_distance": slice(522, 526),
-            "effector_nearest_bar_distance": slice(526, 530),
-            "height_scan": slice(530, 761),
-            "ladder_info": slice(761, 766),
-            "depth_image": slice(766, 2710),
+            "curr_proprio_noisy": slice(45, 89),
+            "proprio_history": slice(89, 529),
+            "base_lin_vel": slice(529, 532),
+            "contact_precision": slice(532, 536),
+            "friction": slice(536, 537),
+            "added_mass": slice(537, 538),
+            "applied_force": slice(538, 541),
+            "applied_torque": slice(541, 544),
+            "effector_ladder_plane_distance": slice(544, 548),
+            "effector_nearest_bar_distance": slice(548, 552),
+            "height_scan": slice(552, 783),
+            "ladder_info": slice(783, 788),
+            "depth_image": slice(788, 2732),
             # Clean precision is appended for privileged supervision and
             # imitation. Student policy inputs never consume it directly.
-            "clean_contact_precision": slice(2710, 2714),
+            "clean_contact_precision": slice(2732, 2736),
         }
 
         self.proprio_dim = 42

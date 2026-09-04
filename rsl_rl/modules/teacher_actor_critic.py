@@ -31,16 +31,16 @@ class TeacherActorCritic(nn.Module):
         self.obs_slices = {
             "goal": slice(0, 3),
             "curr_proprio_clean": slice(3, 45),
-            "base_lin_vel": slice(507, 510),
-            "contact_precision": slice(510, 514),
-            "friction": slice(514, 515),
-            "added_mass": slice(515, 516),
-            "applied_force": slice(516, 519),
-            "applied_torque": slice(519, 522),
-            "effector_ladder_plane_distance": slice(522, 526),
-            "effector_nearest_bar_distance": slice(526, 530),
-            "height_scan": slice(530, 761),
-            "ladder_info": slice(761, 766),
+            "base_lin_vel": slice(529, 532),
+            "contact_precision": slice(532, 536),
+            "friction": slice(536, 537),
+            "added_mass": slice(537, 538),
+            "applied_force": slice(538, 541),
+            "applied_torque": slice(541, 544),
+            "effector_ladder_plane_distance": slice(544, 548),
+            "effector_nearest_bar_distance": slice(548, 552),
+            "height_scan": slice(552, 783),
+            "ladder_info": slice(783, 788),
         }
 
         self.height_encoder = self._build_encoder(231, 128, 64, 32, activation_module)
