@@ -61,16 +61,14 @@ class StudentActorCritic(ActorCritic):
         self.history_latent_dim = history_latent_dim
         self.depth_latent_dim = depth_latent_dim
         self.mixer_latent_dim = mixer_latent_dim
-        # FL/FR contact precision is appended to the noisy proprioception and
-        # its history. The estimator predicts all four clean values, and the
-        # actor consumes all four predictions.
+        # Keep the c620 Student actor layout. The environment still provides
+        # front-foot noisy precision in proprio/history, but this ablation
+        # deliberately excludes those two sensor values from the Student.
         self.estimator_dim = 15
         self.ladder_obs_dim = 2 * 4 + 5
         self.recurrent_output_dim = rnn_hidden_size
         self.recurrent_latent_dim = rnn_latent_dim
-        # The front precision sensor remains part of the 44-D proprioception;
-        # the explicit precision input is the four-leg estimator output.
-        actor_input_dim = 44 + 3 + 3 + 4 + self.ladder_obs_dim + 2 + 6 + self.recurrent_latent_dim
+        actor_input_dim = 42 + 3 + self.estimator_dim + self.ladder_obs_dim + self.recurrent_latent_dim
 
         super().__init__(
             num_actor_obs=num_actor_obs,
@@ -86,7 +84,7 @@ class StudentActorCritic(ActorCritic):
 
         activation_module = get_activation(activation)
         self.proprio_history_len = history_length
-        self.history_proprio_dim = self.proprio_dim + 2
+        self.history_source_proprio_dim = self.proprio_dim + 2
         self.depth_height = 36
         self.depth_width = 54
 
@@ -113,7 +111,7 @@ class StudentActorCritic(ActorCritic):
 
     def _build_history_encoder(self, activation):
         return nn.Sequential(
-            nn.Linear(self.history_length * self.history_proprio_dim, 128),
+            nn.Linear(self.history_length * self.proprio_dim, 128),
             self._clone_activation(activation),
             nn.Linear(128, 64),
             self._clone_activation(activation),
@@ -164,11 +162,12 @@ class StudentActorCritic(ActorCritic):
     def _encode_history(self, proprio_history):
         leading_shape = proprio_history.shape[:-1]
         history = proprio_history.reshape(
-            *leading_shape, self.proprio_history_len, self.history_proprio_dim
+            *leading_shape, self.proprio_history_len, self.history_source_proprio_dim
         )
-        recent_history = history[..., -self.history_length:, :].reshape(
+        # Discard the two noisy front-foot sensor values in every frame.
+        recent_history = history[..., -self.history_length:, :self.proprio_dim].reshape(
             *leading_shape,
-            self.history_length * self.history_proprio_dim,
+            self.history_length * self.proprio_dim,
         )
         return self.history_encoder(recent_history)
 
@@ -182,6 +181,14 @@ class StudentActorCritic(ActorCritic):
         obs = self._split_observations(observations)
         history_latent = self._encode_history(obs["proprio_history"])
         estimator_output = self.estimator(history_latent)
+        estimated_state = torch.cat(
+            [
+                estimator_output[..., :3],
+                torch.sigmoid(estimator_output[..., 3:7]),
+                estimator_output[..., 7:15],
+            ],
+            dim=-1,
+        )
         depth_latent = self._encode_depth(obs["depth_image"])
         mixer_latent = self.mixer(torch.cat([history_latent, depth_latent], dim=-1))
         if dones is not None:
@@ -197,21 +204,20 @@ class StudentActorCritic(ActorCritic):
         ]
         self.reconstructed_height_obs = self.height_decoder(z)
 
-        noisy_proprio = obs["curr_proprio_noisy"]
+        noisy_proprio = obs["curr_proprio_noisy"][..., :self.proprio_dim]
         goal = obs["goal"]
         if observations_are_padded:
             noisy_proprio = unpad_trajectories(noisy_proprio, masks)
             goal = unpad_trajectories(goal, masks)
-            estimator_output = unpad_trajectories(estimator_output, masks)
+            estimated_state = unpad_trajectories(estimated_state, masks)
         return torch.cat(
             [
                 noisy_proprio,
                 goal,
-                estimator_output[..., :3],
-                torch.sigmoid(estimator_output[..., 3:7]),
+                estimated_state[..., :7],
                 self.reconstructed_ladder_obs[..., :8],
-                estimator_output[..., 7:9],
-                estimator_output[..., 9:15],
+                estimated_state[..., 7:9],
+                estimated_state[..., 9:15],
                 self.reconstructed_ladder_obs[..., 8:13],
                 z,
             ],
@@ -255,7 +261,7 @@ class StudentActorCritic(ActorCritic):
             dim=-1,
         )
         if sum_features:
-            # Backpropagate the sum over all 13 supervised estimator outputs.
+            # Backpropagate the sum over all 15 supervised estimator outputs.
             return torch.mean(torch.sum(per_output_loss, dim=-1))
         # Keep the diagnostic independent of the number of supervised outputs.
         return torch.mean(per_output_loss)
@@ -324,26 +330,11 @@ class StudentActorCritic(ActorCritic):
             student_tensor = self.state_dict()[key]
             if teacher_tensor.shape == student_tensor.shape:
                 continue
-            if (
-                key == "actor.0.weight"
-                and teacher_tensor.shape[0] == student_tensor.shape[0]
-                and teacher_tensor.shape[1] == 105
-                and student_tensor.shape[1] == 107
-            ):
-                # Teacher input: [proprio42, remaining63]. Student inserts
-                # noisy FL/FR sensors after proprio; initialize those new
-                # columns neutrally while preserving every Teacher feature.
-                expanded_weight = torch.zeros_like(student_tensor)
-                expanded_weight[:, :42] = teacher_tensor[:, :42]
-                expanded_weight[:, 44:] = teacher_tensor[:, 42:]
-                copied_state_dict[key] = expanded_weight
-                continue
-            else:
-                raise RuntimeError(
-                    "Teacher checkpoint tensor shape does not match Student initialization for "
-                    f"{key}: teacher={tuple(teacher_tensor.shape)}, "
-                    f"student={tuple(student_tensor.shape)}"
-                )
+            raise RuntimeError(
+                "Teacher checkpoint tensor shape does not match Student initialization for "
+                f"{key}: teacher={tuple(teacher_tensor.shape)}, "
+                f"student={tuple(student_tensor.shape)}"
+            )
         self.load_state_dict(copied_state_dict, strict=False)
         print(f"Initialized Student actor and critic from Teacher checkpoint: {checkpoint}")
 
