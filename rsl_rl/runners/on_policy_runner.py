@@ -295,6 +295,7 @@ class OnPolicyRunner:
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
         mean_std = self.alg.actor_critic.std.mean()
         increasing_reward_coeff = self.env.increasing_reward_coeff_buf.item()
+        decreasing_reward_coeff = self.env.decreasing_reward_coeff_buf.item()
         noise_level = self._get_env_scalar("get_current_noise_level")
         push_level = self._get_env_scalar("get_current_push_level")
         foot_push_level = self._get_env_scalar("get_current_foot_push_level")
@@ -319,6 +320,7 @@ class OnPolicyRunner:
         self.writer.add_scalar('Gradient/imitation_distribution_per_sample_mean_abs', locs['mean_imitation_gradient'], locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
         self.writer.add_scalar('Train/increasing_reward_coefficient', increasing_reward_coeff, locs['it'])
+        self.writer.add_scalar('Train/decreasing_reward_coefficient', decreasing_reward_coeff, locs['it'])
         if noise_level is not None:
             self.writer.add_scalar('Train/noise_level', noise_level, locs['it'])
         if push_level is not None:
@@ -362,6 +364,7 @@ class OnPolicyRunner:
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
+                          f"""{'Decreasing reward coefficient:':>{pad}} {decreasing_reward_coeff:.4f}\n"""
                           f"""{disturbance_string}"""
                           f"""{terrain_diagnostics_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
@@ -385,6 +388,7 @@ class OnPolicyRunner:
                           f"""{'Imitation coefficient:':>{pad}} {self.alg.imitation_loss_coef:.4f}\n"""
                           f"""{'Policy coefficient:':>{pad}} {self.alg.policy_loss_coef:.4f}\n"""
                           f"""{'Increasing reward coefficient:':>{pad}} {increasing_reward_coeff:.4f}\n"""
+                          f"""{'Decreasing reward coefficient:':>{pad}} {decreasing_reward_coeff:.4f}\n"""
                           f"""{disturbance_string}"""
                           f"""{terrain_diagnostics_string}"""
                           f"""{'Mean RL gradient per sample:':>{pad}} {locs['mean_rl_policy_gradient']:.4f}\n"""
@@ -406,6 +410,9 @@ class OnPolicyRunner:
         increasing_reward_coeff = None
         if hasattr(self.env, 'increasing_reward_coeff_buf'):
             increasing_reward_coeff = float(self.env.increasing_reward_coeff_buf.item())
+        decreasing_reward_coeff = None
+        if hasattr(self.env, 'decreasing_reward_coeff_buf'):
+            decreasing_reward_coeff = float(self.env.decreasing_reward_coeff_buf.item())
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
@@ -414,6 +421,7 @@ class OnPolicyRunner:
             'imitation_loss_coef': self.alg.imitation_loss_coef,
             'policy_loss_coef': self.alg.policy_loss_coef,
             'increasing_reward_coeff': increasing_reward_coeff,
+            'decreasing_reward_coeff': decreasing_reward_coeff,
             'infos': infos,
             }, path)
 
@@ -427,6 +435,7 @@ class OnPolicyRunner:
         self.alg.imitation_loss_coef = loaded_dict.get('imitation_loss_coef', self.alg.imitation_loss_coef)
         self.alg.policy_loss_coef = loaded_dict.get('policy_loss_coef', self.alg.policy_loss_coef)
         self.env.increasing_reward_coeff_buf.fill_(float(loaded_dict['increasing_reward_coeff']))
+        self.env.decreasing_reward_coeff_buf.fill_(float(loaded_dict['decreasing_reward_coeff']))
         self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
 
